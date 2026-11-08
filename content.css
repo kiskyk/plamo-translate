@@ -1,0 +1,27 @@
+plamo-tr {
+  display: block !important;
+  margin: 0.3em 0 0.2em !important;
+  padding: 0 0 0 0.6em !important;
+  border-left: 3px solid rgba(46, 160, 110, 0.75) !important;
+  color: inherit !important;
+  font-family: "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", sans-serif !important;
+  font-style: normal !important;
+  white-space: pre-line !important;
+  text-align: start !important;
+}
+h1 > plamo-tr, h2 > plamo-tr, h3 > plamo-tr, h4 > plamo-tr { font-size: 0.85em !important; }
+.plamo-loading { box-shadow: inset 3px 0 0 rgba(46, 160, 110, 0.35) !important; }
+plamo-toast {
+  position: fixed !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  z-index: 2147483647 !important;
+  max-width: 420px !important;
+  padding: 8px 12px !important;
+  border-radius: 8px !important;
+  background: #1f2a24 !important;
+  color: #e8f3ec !important;
+  font: 13px/1.5 "BIZ UDPGothic", "Yu Gothic UI", sans-serif !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3) !important;
+}
+plamo-toast[hidden] { display: none !important; }

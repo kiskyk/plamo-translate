@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>PLaMo Translate の設定</title>
+  <style>
+    body { font: 14px/1.7 "BIZ UDPGothic", "Yu Gothic UI", sans-serif; margin: 16px; min-width: 360px; }
+    label { display: block; margin: 0 0 12px; }
+    input, select { display: block; margin-top: 4px; width: 100%; padding: 5px 8px; border: 1px solid #c5cbd0; border-radius: 6px; font: inherit; }
+    #saved { color: #1b6b48; min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <label>翻訳サーバー
+    <input id="server" placeholder="http://127.0.0.1:11437">
+  </label>
+  <label>訳す先の言語
+    <select id="target">
+      <option value="ja">日本語（外国語の部分だけ訳す）</option>
+      <option value="en">英語（日本語の部分だけ訳す）</option>
+    </select>
+  </label>
+  <label>Web ページの表示
+    <select id="mode">
+      <option value="replace">元の文を訳文に置き換える（マウスを乗せると原文）</option>
+      <option value="dual">原文の下に訳文を足す</option>
+    </select>
+  </label>
+  <label>自動で起動するモデル
+    <select id="size">
+      <option value="2b">2B（速い・VRAM 約2.4GB）</option>
+      <option value="8b">8B（少し丁寧・VRAM 約4.4GB）</option>
+      <option value="0.8b">0.8B（いちばん軽い・要ダウンロード）</option>
+    </select>
+  </label>
+  <label>サーバーが止まっていたら自動で起動する
+    <select id="autoStart">
+      <option value="true">する</option>
+      <option value="false">しない</option>
+    </select>
+  </label>
+  <label>使わないとき自動で止めるまでの分（0 で止めない。拡張機能が起動したときだけ止める）
+    <input id="idleStopMin" type="number" min="0" step="5">
+  </label>
+  <div id="saved"></div>
+  <script src="options.js"></script>
+</body>
+</html>

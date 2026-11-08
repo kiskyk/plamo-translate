@@ -1,0 +1,136 @@
+:root {
+  --desk: #e4e6e8;
+  --bar: #ffffff;
+  --ink: #1d2124;
+  --muted: #5f6870;
+  --line: #cfd4d8;
+  --page: #ffffff;
+  --accent: #2ea06e;
+  --accent-ink: #1b6b48;
+  --pending: #eef1f3;
+}
+@media screen and (prefers-color-scheme: dark) {
+  :root {
+    --desk: #1c1f22;
+    --bar: #24282c;
+    --ink: #e6e9eb;
+    --muted: #9aa3ab;
+    --line: #3a4046;
+    --page: #2a2f33;
+    --accent: #3dbb84;
+    --accent-ink: #7fd8ae;
+    --pending: #30363b;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--desk); color: var(--ink); }
+body { font: 15px/1.75 "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", sans-serif; }
+
+.bar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 10px 20px; background: var(--bar); border-bottom: 1px solid var(--line);
+}
+.file { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+#name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50vw; }
+#progress { color: var(--muted); font-size: 13px; }
+.tools { display: flex; align-items: center; gap: 14px; font-size: 13px; }
+.btn {
+  padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; background: var(--page);
+}
+.btn:hover { border-color: var(--accent); }
+button.btn { font: inherit; color: inherit; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.btn.primary:hover { background: var(--accent-ink); }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.print-img { display: none; }
+
+.toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.server { color: var(--muted); }
+.server.ok::before, .server.ng::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+}
+.server.ok::before { background: var(--accent); }
+.server.ng { color: #c0392b; }
+.server.ng::before { background: #c0392b; }
+
+main { max-width: 1800px; margin: 0 auto; padding: 20px; }
+.drop {
+  margin: 12vh auto; max-width: 560px; padding: 40px; text-align: center;
+  border: 2px dashed var(--line); border-radius: 10px; color: var(--muted);
+}
+.drop.over { border-color: var(--accent); color: var(--ink); }
+.hint { font-size: 13px; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px; align-items: start; }
+.sheet { position: relative; background: var(--page); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+.sheet canvas { display: block; width: 100%; height: auto; }
+.sheet .no {
+  position: absolute; left: 8px; top: 6px; font-size: 12px; color: var(--muted);
+}
+.tr {
+  background: var(--page); padding: 22px 26px; min-height: 120px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.12);
+}
+.para { margin: 0 0 0.9em; cursor: pointer; border-left: 3px solid transparent; padding-left: 10px; margin-left: -13px; }
+.para:hover { border-left-color: var(--line); }
+.para.pending { color: var(--muted); }
+.para.pending .ja { background: var(--pending); color: transparent; border-radius: 4px; }
+.para.pending .ja img.math { visibility: hidden; }
+.para.keep .ja { color: var(--muted); font-size: 13px; }
+.para .orig { display: none; margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.para.open .orig, body.show-orig .para .orig { display: block; }
+.para.open { border-left-color: var(--accent); }
+.tr .empty { color: var(--muted); font-size: 13px; }
+img.math { vertical-align: middle; max-width: 100%; }
+.para.table { overflow-x: auto; }
+.para.fig { cursor: default; }
+.figbox { position: relative; margin: 0.3em auto 0.8em; max-width: 100%; }
+.figbox img.figure { position: absolute; display: block; height: auto; background: #fff; }
+.ptable { border-collapse: collapse; font-size: 13px; line-height: 1.5; margin: 0.2em 0; }
+.ptable th, .ptable td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.ptable img.math { max-width: none; }
+.ptable td:has(img.math) { white-space: nowrap; }
+.ptable th { border-bottom: 2px solid var(--muted); font-weight: 700; }
+.para.table.pending .ja { color: inherit; background: none; }
+.para.table.pending .ptable { opacity: 0.55; }
+.para.table .orig img.math { height: auto !important; width: 100%; }
+.para.eq { cursor: default; text-align: center; margin: 0.4em 0 1em; }
+.para.eq img.math { max-width: 100%; object-fit: contain; }
+@media screen and (prefers-color-scheme: dark) {
+  img.math { filter: invert(1); }
+}
+.err { color: #c0392b; }
+
+@media (max-width: 900px) {
+  .row { grid-template-columns: 1fr; }
+  main { padding: 12px 16px; }
+}
+
+/* ---- bilingual PDF: one A4 landscape sheet per page, original left, translation right ----
+   body.print-layout is set by exportPdf() while printing, so the same layout can be measured on
+   screen first (to shrink long translations until they fit one sheet). */
+@page { size: A4 landscape; margin: 9mm; }
+body.print-layout { width: 279mm; margin: 0; background: #fff; color: #111; font-size: 9pt; line-height: 1.45; }
+body.print-layout .bar, body.print-layout .drop, body.print-layout .sheet .no { display: none !important; }
+body.print-layout main { max-width: none; margin: 0; padding: 0; }
+body.print-layout .row {
+  display: grid; grid-template-columns: auto 1fr; gap: 6mm; align-items: start;
+  margin: 0; height: 191mm; overflow: hidden; break-after: page; break-inside: avoid;
+}
+body.print-layout .row:last-child { break-after: auto; }
+body.print-layout .row.overflow { height: auto; overflow: visible; break-inside: auto; }
+body.print-layout .sheet { box-shadow: none; border: 0.3pt solid #999; aspect-ratio: auto !important; background: #fff; }
+body.print-layout .sheet canvas { display: none; }
+body.print-layout .print-img { display: block; height: 178mm; width: auto; }
+body.print-layout .tr { box-shadow: none; padding: 0; min-height: 0; background: none; color: #111; }
+body.print-layout .para { margin: 0 0 0.45em; padding-left: 0; border-left: 0; }
+body.print-layout .para.pending .ja { background: none; color: inherit; }
+body.print-layout .para.pending .ja img.math { visibility: visible; }
+body.print-layout .ptable { font-size: 0.9em; }
+body.print-layout .ptable th, body.print-layout .ptable td { padding: 1px 4px; border-color: #bbb; }
+body.print-layout .para.table { overflow: visible; }
+body.print-layout img.math { filter: none !important; }
+@media print {
+  html, body { background: #fff !important; }
+}

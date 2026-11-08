@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Translation test page</title>
+  <link rel="stylesheet" href="../content.css">
+  <style>
+    body { font: 16px/1.6 Georgia, serif; max-width: 760px; margin: 24px auto; padding: 0 16px; }
+    nav a { margin-right: 12px; }
+    .spacer { height: 1400px; border-left: 2px dotted #ccc; padding-left: 8px; color: #888; }
+  </style>
+</head>
+<body>
+  <nav><a href="#">Home</a><a href="#">Docs</a><a href="#">Blog</a><button>Sign in</button></nav>
+  <h1>Getting started with the cache layer</h1>
+  <p>When the cache is cold, the first request has to read every layer from disk, so expect the initial response to take several seconds. Subsequent requests reuse the weights that are already resident in memory.</p>
+  <p>Install the package with <code>npm install fastcache</code>, then call <a href="#">the setup function</a> before your server starts listening.</p>
+  <pre><code>const cache = createCache({ size: "2GB" });
+cache.warm();</code></pre>
+  <ul>
+    <li>Entries expire after one hour unless you pin them.</li>
+    <li>Pinned entries survive restarts, but they count against your quota.</li>
+  </ul>
+  <table border="1">
+    <tr><th>Option</th><th>Meaning</th></tr>
+    <tr><td>size</td><td>Maximum memory the cache may use.</td></tr>
+    <tr><td>ttl</td><td>How long an entry lives before it is evicted.</td></tr>
+  </table>
+  <p>これはすでに日本語の段落なので、翻訳されないはずです。</p>
+  <div>A div with direct text, followed by a nested paragraph.<p>This nested paragraph should be translated on its own.</p></div>
+  <div class="spacer">(scroll down)</div>
+  <h2 id="far">Troubleshooting</h2>
+  <p id="farp">If you run out of memory, the runtime will silently move some layers to the CPU, which keeps things working but can make generation five to ten times slower.</p>
+  <div id="dyn"></div>
+  <script src="../shared.js"></script>
+  <script src="../content.js"></script>
+  <script>
+    setTimeout(() => {
+      const p = document.createElement("p");
+      p.id = "added";
+      p.textContent = "This paragraph was added by a script two seconds after the page loaded.";
+      document.getElementById("dyn").appendChild(p);
+    }, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "llamaServer": "C:/llama.cpp/llama-server.exe",
+  "modelDir": "C:/models/plamo-3-translate",
+  "logDir": "",
+  "port": 11437,
+  "gpuLayers": 99,
+  "context": 16384,
+  "parallel": 4
+}

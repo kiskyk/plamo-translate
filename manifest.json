@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "PLaMo Translate (local)",
+  "version": "0.1.0",
+  "description": "Unofficial. Translates web pages and PDFs with PLaMo 3 Translate running on this PC (llama-server).",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3NTNOx/bU6fwvL2x0qei8+26c1TIt6cMb0Icdrrf3h6UjxfIFa2F0J26D6XOdx9ssMuXi8zRgk6Z5jHtsS4k+bqpf3iOcdtO9FCae3VzprtUDnH9M4W15S7MbDM6dG1GWAb/RddXZaZdejmWmGdivxEIHXmADV9LwViV8SGF8B6ae/oeCph6noR5qRybBt3ROpFv9OLAEmWp2m4K5DnY2FQpRGSSB/4xRbeTgv5bXyGFFy/3f0nI9DlvYXx8IXdYh/WiHuDR9wjunJ/9EBAzu3R1kwvVhPcSwZU5vLtN7wRo7Y51oV1D4VfJe0O9kLRugcGipnQ6q+c95bbGkgj7swIDAQAB",
+  "permissions": ["scripting", "activeTab", "contextMenus", "storage", "tabs", "nativeMessaging", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "このページを翻訳（PDF なら翻訳ビューアで開く）" },
+  "commands": {
+    "_execute_action": { "suggested_key": { "default": "Alt+Shift+T" } }
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": false },
+  "web_accessible_resources": [
+    { "resources": ["viewer.html"], "matches": ["<all_urls>"] }
+  ]
+}

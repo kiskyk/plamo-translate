@@ -1,0 +1,13 @@
+# per-PC files written by host/install.ps1 and the user's server settings
+host/host.bat
+host/com.plamo.translate_host.json
+server/config.json
+server/logs/
+
+# test papers (download with test/fetch-papers.ps1)
+test/*.pdf
+test/papers/
+
+__pycache__/
+*.pem
+*.crx

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF 翻訳ビューア</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="file">
+      <span id="name">PDF を選んでね</span>
+      <span id="progress"></span>
+    </div>
+    <div class="tools">
+      <label class="toggle"><input type="checkbox" id="showOrig"> 原文も表示</label>
+      <label class="btn">ファイルを開く<input type="file" id="pick" accept="application/pdf" hidden></label>
+      <button class="btn primary" id="export" disabled>対訳 PDF を保存</button>
+      <span id="server" class="server">サーバー確認中…</span>
+    </div>
+  </header>
+  <main id="pages">
+    <section id="drop" class="drop">
+      <p>PDF をここにドロップするか、「ファイルを開く」から選んでね。</p>
+      <p class="hint">Web の PDF は、開いているタブで拡張機能のボタン（Alt+Shift+T）を押すとここで開くよ。</p>
+    </section>
+  </main>
+  <script src="shared.js"></script>
+  <script type="module" src="viewer.js"></script>
+</body>
+</html>
