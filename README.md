@@ -75,6 +75,7 @@
 | `host/` | 中継プログラム（`host.py`）と登録スクリプト `install.ps1` |
 | `server/` | llama-server の起動・停止スクリプトと設定の例 |
 | `test/` | 動作確認用のページと解析ツール（下記） |
+| `AGENTS.md` / `CLAUDE.md` | 開発するエージェント（Codex・Claude Code など）向けの決まりと落とし穴。`CLAUDE.md` は `AGENTS.md` を読み込むだけ |
 
 ## 動作確認
 
