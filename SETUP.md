@@ -47,7 +47,7 @@ PLaMo 3 の tokenizer（`plamo3`）は b11946 より古い llama.cpp では読�
 gh release download -R ggml-org/llama.cpp --pattern "llama-*-bin-win-cuda-12.4-x64.zip" --pattern "cudart-llama-bin-win-cuda-12.4-x64.zip" -D <置き場所>
 ```
 
-速さは CUDA 版と Vulkan 版で数 % しか違わない。迷ったら Vulkan 版でよい。
+どれが合うか分からなければ、Vulkan 版を選ぶ（多くの GPU で動く）。
 
 **確かめる**: `<置き場所>\llama-server.exe --version` が `build 11946` 以上を出す。
 
@@ -80,7 +80,6 @@ Copy-Item server\config.example.json server\config.json
 | `llamaServer` | 手順 1 の `llama-server.exe` のフルパス |
 | `modelDir` | 手順 2 のフォルダ |
 | `logDir` | ログの置き場所。空なら `server\logs\` |
-| `port` | 既定 11437。変えたら、拡張機能の設定の「サーバー」も同じ番号にする |
 | `gpuLayers` | GPU に載せる層の数。VRAM が足りないときは下げる（0 で CPU だけ） |
 | `context` / `parallel` | 文脈長と同時処理の数。普通は変えない |
 
@@ -93,7 +92,7 @@ powershell -ExecutionPolicy Bypass -File server\start-plamo.ps1        # 2B（-S
 powershell -ExecutionPolicy Bypass -File server\stop-plamo.ps1
 ```
 
-`up (2b, port 11437)` と出れば動いている。初回は GPU の準備で十数秒かかることがある。
+`up (2b, port 11437)` と出れば動いている。60 秒待っても起動しなければ `failed` と出る。
 
 Windows 以外で手で起動するときは、同じ引数で llama-server を起動する。
 

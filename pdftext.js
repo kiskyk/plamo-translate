@@ -11,6 +11,7 @@ function family(name) {
   return String(name || "").replace(/^[A-Z]{6}\+/, "");
 }
 
+// The real font name (CMMI10 etc.) is only in commonObjs after the page has been rendered.
 function fontOf(page, id) {
   try {
     return family(page.commonObjs.get(id)?.name);

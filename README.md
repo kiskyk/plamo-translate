@@ -78,7 +78,7 @@
 | `server/` | llama-server の起動・停止スクリプト、設定の例、使える状態かの点検（`check.ps1`） |
 | `SETUP.md` | 新しい PC で使える状態にする手順 |
 | `test/` | 動作確認用のページと解析ツール（下記） |
-| `AGENTS.md` / `CLAUDE.md` | 開発するエージェント（Codex・Claude Code など）向けの決まりと落とし穴。`CLAUDE.md` は `AGENTS.md` を読み込むだけ |
+| `AGENTS.md` / `CLAUDE.md` | コーディングエージェント（Codex・Claude Code など）に環境構築を頼むときの手順。`CLAUDE.md` は `AGENTS.md` を読み込むだけ |
 
 ## 動作確認
 

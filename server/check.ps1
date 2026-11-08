@@ -16,7 +16,7 @@ if (Test-Path $cfgPath) {
     try { $cfg = Get-Content -Raw -Encoding utf8 $cfgPath | ConvertFrom-Json } catch {}
 }
 Report ($null -ne $cfg) "config" $(if ($cfg) { $cfgPath } else { "server\config.json missing or invalid (copy config.example.json)" })
-$port = if ($cfg -and $cfg.port) { [int]$cfg.port } else { 11437 }
+$port = 11437
 
 # 2. llama-server and its build number (PLaMo 3 needs b11946+)
 $exe = if ($cfg) { $cfg.llamaServer } else { $null }
