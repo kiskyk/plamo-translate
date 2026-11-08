@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>数式の照合</title>
+  <style>
+    body { font: 15px/1.6 "BIZ UDPGothic", "Yu Gothic UI", sans-serif; margin: 16px; background: #fff; color: #111; }
+    math { font-family: "Cambria Math", serif; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: center; border-bottom: 1px solid #ddd; padding: 6px 0; font-size: 18px; }
+    .row > div { overflow-x: auto; }
+    .row img { max-width: none; }
+    .why { color: #b3261e; font-size: 13px; }
+    .wf { color: #8a5a00; font-size: 12px; }
+    #sum { position: sticky; top: 0; background: #fff; padding: 6px 0; font-weight: 700; z-index: 2; }
+    .id { color: #667; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div id="sum">running…</div>
+  <div id="list"></div>
+  <script type="module">
+    import * as pdfjsLib from "../vendor/pdfjs/pdf.min.mjs";
+    import { blocksFromPage, graphicsBoxes, makeCropper } from "../pdftext.js";
+    import { mathFrom } from "../mathml.js";
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("../vendor/pdfjs/pdf.worker.min.mjs", import.meta.url).href;
+
+    const q = new URLSearchParams(location.search);
+    const files = (q.get("files") || "sample.pdf").split(",");
+    const maxPages = Number(q.get("pages") || 99);
+    const only = q.get("only"); // "fail" lists failures only
+    const kind = q.get("kind") || "all"; // eq | inline | all
+    const list = document.getElementById("list");
+    const stats = { display: [0, 0], inline: [0, 0], whys: {} };
+    const results = [];
+
+    for (const f of files) {
+      const pdf = await pdfjsLib.getDocument({ url: new URL(f, location.href).href, isEvalSupported: false }).promise;
+      for (let p = 1; p <= Math.min(pdf.numPages, maxPages); p++) {
+        const page = await pdf.getPage(p);
+        const vp = page.getViewport({ scale: 3 });
+        const c = document.createElement("canvas");
+        c.width = vp.width; c.height = vp.height;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+        await page.render({ canvasContext: ctx, viewport: vp, intent: "print" }).promise;
+        const gfx = graphicsBoxes(await page.getOperatorList({ intent: "print" }), pdfjsLib.OPS);
+        const blocks = blocksFromPage(page, await page.getTextContent(), gfx);
+        const crop = makeCropper(c, vp);
+        for (const b of blocks) {
+          const groups = b.kind === "eq" ? [{ d: true, items: b.items, h: b.h }]
+            : b.kind === "text" ? b.parts.filter((x) => x.t === "math").map((x) => ({ d: false, items: x.items, h: b.h })) : [];
+          for (const g of groups) {
+            const r = mathFrom(g.items, gfx.rules, g.d);
+            const slot = g.d ? stats.display : stats.inline;
+            slot[1]++;
+            if (r.math) slot[0]++;
+            else { const key = r.why.replace(/U\+[0-9A-F]+ /, ""); stats.whys[key] = (stats.whys[key] || 0) + 1; }
+            results.push({ f, p, d: g.d, ok: !!r.math, why: r.why || "", text: g.items.map((i) => i.str).join("") });
+            if (only === "fail" && r.math) continue;
+            if (kind === "eq" && !g.d) continue;
+            if (kind === "inline" && g.d) continue;
+            const row = document.createElement("div");
+            row.className = "row";
+            const left = document.createElement("div");
+            const img = crop(g.items, g.h);
+            left.append(img);
+            const right = document.createElement("div");
+            if (r.math) right.append(r.math);
+            else { const w = document.createElement("span"); w.className = "why"; w.textContent = r.why; right.append(w); }
+            if (r.tag) right.append(" " + r.tag);
+            const id = document.createElement("div");
+            id.className = "id";
+            id.textContent = f.split("/").pop() + " p" + p;
+            left.append(id);
+            row.append(left, right);
+            list.append(row);
+          }
+        }
+      }
+    }
+    const pct = ([a, b]) => `${a}/${b} (${b ? Math.round((a / b) * 100) : 0}%)`;
+    document.getElementById("sum").textContent = `独立式 ${pct(stats.display)}・文中 ${pct(stats.inline)}`;
+    globalThis.__stats = stats;
+    globalThis.__results = results;
+    document.title = "done";
+  </script>
+</body>
+</html>

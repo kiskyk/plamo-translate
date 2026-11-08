@@ -9,14 +9,26 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 PORT = 11437
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server")
-SIZES = {"0.8b", "2b", "8b"}
+SIZES = {"0.8b", "2b", "8b", "31b"}
+LOG = os.path.join(SCRIPTS, "logs", "host.log")
 # The browser may run hosts inside a job object that kills children on exit; break away from it.
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 FLAGS = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+
+
+def note(text):
+    """Keeps a record of each call: it shows whether the browser reached this program at all."""
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + text + "\n")
+    except OSError:
+        pass
 
 
 def read_msg():
@@ -60,16 +72,20 @@ def main():
     msg = read_msg() or {}
     cmd = msg.get("cmd", "status")
     log = ""
+    note(f"called: {cmd} {msg.get('size', '')}".strip())
     try:
         if cmd == "start":
             size = msg.get("size", "2b")
             if size not in SIZES:
                 raise ValueError("size")
-            log = run_ps("start-plamo.ps1", "-Size", size)
+            log = run_ps("start-plamo.ps1", "-Size", size, timeout=330)
         elif cmd == "stop":
             log = run_ps("stop-plamo.ps1", timeout=30)
-        send({"ok": True, **status(), "log": log})
+        st = status()
+        note(f"done: {cmd} up={st['up']} {log}".strip())
+        send({"ok": True, **st, "log": log})
     except Exception as e:
+        note(f"failed: {cmd} {type(e).__name__}: {e}")
         send({"ok": False, **status(), "log": f"{type(e).__name__}: {e} {log}"})
 
 

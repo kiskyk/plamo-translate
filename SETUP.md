@@ -59,11 +59,11 @@ Hugging Face の pfnet（ログイン不要）から Q4_K_M を1つのフォル�
 $dir = "<モデルの置き場所>"
 New-Item -ItemType Directory -Force $dir | Out-Null
 Invoke-WebRequest "https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF/resolve/main/plamo-3-translate-2b-Q4_K_M.gguf" -OutFile "$dir\plamo-3-translate-2b-Q4_K_M.gguf"
-# 8B も使うなら（任意）
-# Invoke-WebRequest "https://huggingface.co/pfnet/plamo-3-translate-8b-GGUF/resolve/main/plamo-3-translate-8b-Q4_K_M.gguf" -OutFile "$dir\plamo-3-translate-8b-Q4_K_M.gguf"
+# ほかのサイズも使うなら（任意）。$s は 0.8b / 8b / 31b（31B は約 20 GB）
+# $s = "8b"; Invoke-WebRequest "https://huggingface.co/pfnet/plamo-3-translate-$s-GGUF/resolve/main/plamo-3-translate-$s-Q4_K_M.gguf" -OutFile "$dir\plamo-3-translate-$s-Q4_K_M.gguf"
 ```
 
-ファイル名は変えない。起動スクリプトは `plamo-3-translate-<2b|8b>-Q4_K_M.gguf` を探す。モデルの利用条件は各モデルのページの LICENSE（PLaMo コミュニティライセンス）に従う。
+ファイル名は変えない。起動スクリプトは `plamo-3-translate-<0.8b|2b|8b|31b>-Q4_K_M.gguf` を探す。モデルの利用条件は各モデルのページの LICENSE（PLaMo コミュニティライセンス）に従う。
 
 **確かめる**: 2B のファイルが約 1.8 GB（1,807,202,144 バイト）ある。
 

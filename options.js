@@ -1,4 +1,4 @@
-const DEFAULTS = { server: "http://127.0.0.1:11437", target: "ja", mode: "replace", size: "2b", autoStart: true, idleStopMin: 30 };
+const DEFAULTS = { server: "http://127.0.0.1:11437", target: "ja", mode: "replace", math: "mathml", size: "2b", autoStart: true, idleStopMin: 30 };
 const ids = Object.keys(DEFAULTS);
 const $ = (id) => document.getElementById(id);
 

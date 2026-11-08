@@ -1,5 +1,6 @@
 import * as pdfjsLib from "./vendor/pdfjs/pdf.min.mjs";
-import { blocksFromPage, graphicsBoxes, makeCropper, figureImg, sourceOf, sourceBoxes, nodesFrom, partsNodes } from "./pdftext.js";
+import { blocksFromPage, markFrontMatter, findReferences, markReferences, graphicsBoxes, makeCropper, figureImg, sourceOf, sourceBoxes, nodesFrom, partsNodes } from "./pdftext.js";
+import { mathFrom } from "./mathml.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", import.meta.url).href;
 
@@ -7,6 +8,7 @@ const $ = (id) => document.getElementById(id);
 const pagesEl = $("pages");
 const inExtension = !!globalThis.chrome?.runtime?.id;
 let target = "ja";
+let useMathML = true;
 let doc = null; // { pdf, name, rows, paraTotal, paraDone, pagesLoaded, failed, meter }
 // "print" intent: rendering does not wait for requestAnimationFrame, which never fires in a
 // background tab, so pages keep loading while the user is elsewhere.
@@ -19,15 +21,28 @@ function modelLabel(file) {
   return m ? "PLaMo " + m[1].toUpperCase() : "接続中";
 }
 
+let checkingStart = 0; // a start takes seconds; polling must not report "stopped" meanwhile
+let startError = ""; // why the last start failed; polling has no way to learn it again
+
+// Stopping mid-translation would be undone at once: queued paragraphs auto-start the server again.
+function syncStop(up = !$("stopServer").hidden) {
+  const button = $("stopServer");
+  const busy = !!doc && doc.paraDone < doc.paraTotal;
+  button.hidden = !inExtension || !up;
+  button.disabled = busy;
+  button.title = busy ? "翻訳が終わると止められます" : "翻訳サーバーを止めて VRAM を空けます";
+}
+
 async function checkServer(start = false) {
   const el = $("server");
   const button = $("startServer");
+  if (start) checkingStart++;
   try {
     let model;
     if (inExtension) {
-      if (start) { el.textContent = "サーバーを起動中…"; el.className = "server"; button.hidden = true; }
+      if (start) { el.textContent = "サーバーを起動中…"; el.className = "server"; button.hidden = true; $("stopServer").hidden = true; }
       const r = await chrome.runtime.sendMessage({ type: start ? "ensure" : "health" });
-      if (!r?.ok) throw Object.assign(new Error(), { noHost: r?.noHost });
+      if (!r?.ok) throw Object.assign(new Error(), { noHost: r?.noHost, log: r?.log });
       model = r.model;
     } else {
       const r = await fetch("http://127.0.0.1:11437/props");
@@ -37,15 +52,23 @@ async function checkServer(start = false) {
     el.title = (model || "").replace(/\.gguf$/, "");
     el.className = "server ok";
     button.hidden = true;
+    startError = "";
+    syncStop(true);
     return true;
   } catch (e) {
-    el.textContent = e.noHost ? "起動用の中継が未登録" : "サーバー停止中";
-    el.title = e.noHost ? "host\\install.ps1 を一度実行してください" : "翻訳サーバーに接続できません";
+    if (start) startError = e.log || "";
+    const noModel = /model not found/.test(startError);
+    el.textContent = e.noHost ? "中継エラー: " + String(e.log || "不明").slice(0, 70) : noModel ? "モデルのファイルがありません" : "サーバー停止中";
+    el.title = e.noHost ? (e.log || "") + "\nhost\\install.ps1 を一度実行してください" : startError || "翻訳サーバーに接続できません";
     el.className = "server ng";
     button.hidden = false;
+    syncStop(false);
     return false;
+  } finally {
+    if (start) checkingStart--;
   }
 }
+setInterval(() => { if (!document.hidden && !checkingStart) checkServer(); }, 5000);
 
 // ---- messages in place of the pages ----
 function notice(title, hint) {
@@ -119,7 +142,7 @@ async function open(data, name) {
   const total = pdf.numPages;
   const first = await pdf.getPage(1);
   const vp = first.getViewport({ scale: 1 });
-  const d = { pdf, name, rows: [], paraTotal: 0, paraDone: 0, pagesLoaded: 0, failed: new Set(), meter: 0 };
+  const d = { pdf, name, rows: [], paraTotal: 0, paraDone: 0, pagesLoaded: 0, failed: new Set(), meter: 0, refs: findReferences(pdf).catch(() => null) };
   doc = d;
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -223,6 +246,7 @@ function progress() {
   meter.setAttribute("aria-valuenow", Math.round(d.meter * 100));
   meter.firstElementChild.style.transform = `scaleX(${d.meter})`;
   meter.style.opacity = d.meter >= 1 ? 0 : 1;
+  syncStop();
 }
 
 // One translation job of a paragraph or table. Failed jobs stay in d.failed until retried.
@@ -327,10 +351,12 @@ async function exportPdf() {
     const title = document.title;
     document.title = d.name.replace(/\.pdf$/i, "") + "（対訳）";
     document.body.classList.add("print-layout");
+    fitEquations(document);
     fitRows(d.rows);
     btn.textContent = "印刷画面で「PDF に保存」を選んでください";
     window.print(); // blocks until the print dialog is closed
     document.body.classList.remove("print-layout");
+    fitEquations(document);
     for (const row of d.rows) {
       row.classList.remove("overflow");
       row.querySelector(".tr").style.fontSize = "";
@@ -435,6 +461,8 @@ async function loadPage(d, n, row) {
 
   const gfx = graphicsBoxes(await page.getOperatorList({ intent: INTENT }), pdfjsLib.OPS);
   const blocks = blocksFromPage(page, await page.getTextContent(), gfx);
+  if (page.pageNumber === 1) markFrontMatter(blocks);
+  markReferences(blocks, n, await d.refs);
   // Math crops come from a sharper render than the page preview (about 216 dpi or more).
   let crop = makeCropper(canvas, vp);
   let pix = { canvas, vp }; // the render math and figure crops are cut from
@@ -451,6 +479,12 @@ async function loadPage(d, n, row) {
     crop = makeCropper(hi, hvp);
     pix = { canvas: hi, vp: hvp };
   }
+  // Formulas are shown as MathML when they could be rebuilt; the page crop stays as the fallback
+  // and as the original shown when a paragraph is opened.
+  const formula = (items, image) => {
+    if (!useMathML) return image;
+    return mathFrom(items, gfx.rules, false).math || image;
+  };
   const tr = row.querySelector(".tr");
   if (!blocks.length) tr.innerHTML = `<p class="empty">文字が見つからないページです（画像だけのページかもしれません）。</p>`;
   row._spots = [];
@@ -464,7 +498,7 @@ async function loadPage(d, n, row) {
     tr.appendChild(div);
     if (b.kind === "table") {
       link(div, sourceBoxes(b));
-      renderTable(d, b, div, crop, prevText);
+      renderTable(d, b, div, crop, prevText, formula);
       continue;
     }
     if (b.kind === "figure") {
@@ -476,7 +510,24 @@ async function loadPage(d, n, row) {
     if (b.kind === "text") prevText = b.text;
     if (b.kind === "eq") {
       div.classList.add("eq");
-      div.appendChild(crop(b.items, b.h));
+      const image = crop(b.items, b.h);
+      const built = useMathML ? mathFrom(b.items, gfx.rules, true) : {};
+      if (!built.math) { div.appendChild(image); continue; }
+      const line = document.createElement("div");
+      line.className = "eqline";
+      line.appendChild(built.math);
+      if (built.tag) {
+        const no = document.createElement("span");
+        no.className = "eqno";
+        no.textContent = built.tag;
+        line.appendChild(no);
+      }
+      const orig = document.createElement("div");
+      orig.className = "orig";
+      orig.appendChild(image);
+      div.classList.add("built");
+      div.append(line, orig);
+      toggleOriginal(div);
       continue;
     }
     const { src, maths, plain } = sourceOf(b);
@@ -488,14 +539,32 @@ async function loadPage(d, n, row) {
     orig.append(...partsNodes(b.parts, imgs));
     div.append(ja, orig);
     toggleOriginal(div);
-    ja.append(...partsNodes(b.parts, imgs));
-    if (!Plamo.shouldTranslate(plain, target)) {
+    const shown = maths.map((m, i) => formula(m.items, imgs[i]));
+    if (b.front) {
+      ja.textContent = b.lines.map((ln) => ln.text).join("\n");
+      div.classList.add("keep", "front");
+      continue;
+    }
+    ja.append(...partsNodes(b.parts, shown));
+    if (b.keep || !Plamo.shouldTranslate(plain, target)) {
       div.classList.add("keep");
       continue;
     }
-    track(d, div, () => Plamo.translate(src, target).then((t) => { ja.replaceChildren(...nodesFrom(t, imgs)); }));
+    track(d, div, () => Plamo.translate(src, target).then((t) => { ja.replaceChildren(...nodesFrom(t, shown)); }));
   }
+  fitEquations(row);
   progress();
+}
+
+// A display wider than the column is drawn smaller, so that it stays readable without scrolling.
+function fitEquations(root) {
+  for (const line of root.querySelectorAll(".eqline")) {
+    const math = line.querySelector("math");
+    math.style.fontSize = "";
+    const room = line.clientWidth - (line.querySelector(".eqno")?.offsetWidth || 0) - 8;
+    const need = math.firstElementChild?.getBoundingClientRect().width || 0;
+    if (need > room && room > 0) math.style.fontSize = Math.max(55, Math.floor((room / need) * 100)) + "%";
+  }
 }
 
 // Figures that sit side by side on the page (sub-figures, figures in both columns) form one row.
@@ -543,7 +612,7 @@ function renderFigures(figs, div, pix, pageW) {
 
 // Table: rebuilt as an HTML table. All translatable cells go to the model in one request
 // (<tN> per cell) so short cells are translated with the caption and their neighbours as context.
-function renderTable(d, b, div, crop, caption) {
+function renderTable(d, b, div, crop, caption, formula) {
   div.classList.add("table");
   const table = document.createElement("table");
   table.className = "ptable";
@@ -554,9 +623,9 @@ function renderTable(d, b, div, crop, caption) {
       const td = document.createElement(ri === 0 ? "th" : "td");
       tr.appendChild(td);
       if (!cell) continue;
-      const imgs = cell.parts.filter((p) => p.t === "math").map((m) => crop(m.items, b.h));
+      const imgs = cell.parts.filter((p) => p.t === "math").map((m) => formula(m.items, crop(m.items, b.h)));
       td.append(...partsNodes(cell.parts, imgs));
-      if (cell.parts.every((p) => p.t === "text") && Plamo.shouldTranslate(cell.text, target)) {
+      if (!b.keep && cell.parts.every((p) => p.t === "text") && Plamo.shouldTranslate(cell.text, target)) {
         cells.push({ td, text: cell.text });
       }
     }
@@ -591,6 +660,7 @@ function applySize() {
   document.documentElement.style.setProperty("--tr-size", trSize + "px");
   $("fontDown").disabled = trSize <= SIZE_MIN;
   $("fontUp").disabled = trSize >= SIZE_MAX;
+  fitEquations(document);
 }
 
 function changeSize(delta) {
@@ -606,6 +676,11 @@ try {
 applySize();
 
 // ---- wiring ----
+let refit = null;
+window.addEventListener("resize", () => {
+  clearTimeout(refit);
+  refit = setTimeout(() => fitEquations(document), 200);
+});
 $("fontDown").addEventListener("click", () => changeSize(-1));
 $("fontUp").addEventListener("click", () => changeSize(1));
 $("showOrig").addEventListener("change", (e) => document.body.classList.toggle("show-orig", e.target.checked));
@@ -616,6 +691,22 @@ $("startServer").addEventListener("click", async (e) => {
   const ok = await checkServer(true);
   e.target.disabled = false;
   if (ok && doc?.failed.size) retry(doc);
+});
+$("stopServer").addEventListener("click", async (e) => {
+  const el = $("server");
+  e.target.disabled = true;
+  el.textContent = "サーバーを停止中…";
+  el.className = "server";
+  checkingStart++;
+  const r = await chrome.runtime.sendMessage({ type: "stop" }).catch((err) => ({ log: String(err.message || err) }));
+  checkingStart--;
+  if (r?.ok && !r.up) { checkServer(); return; }
+  // No reply at all: the page was reloaded from disk but the extension's background is still the old one.
+  const why = r ? r.log || "不明" : "拡張機能を再読み込みしてください";
+  el.textContent = "停止できませんでした: " + String(why).slice(0, 70);
+  el.title = why;
+  el.className = "server ng";
+  e.target.disabled = false;
 });
 $("pageNo").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { goToPage(Number(e.target.value)); e.target.blur(); }
@@ -654,7 +745,9 @@ document.addEventListener("drop", (e) => {
 });
 
 (async () => {
-  target = await Plamo.target();
+  const prefs = await Plamo.prefs();
+  target = prefs.target;
+  useMathML = prefs.math !== "image";
   checkServer(true);
   const file = new URLSearchParams(location.search).get("file");
   if (!file) return;

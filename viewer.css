@@ -121,6 +121,7 @@ body.dragging #dropveil { display: flex; }
 .para.pending .ja { background: var(--pending); color: transparent; border-radius: 4px; }
 .para.pending .ja img.math { visibility: hidden; }
 .para.keep .ja { color: var(--muted); font-size: 0.87em; }
+.para.front .ja { white-space: pre-line; }
 .para .orig { display: none; margin-top: 4px; color: var(--muted); font-size: 0.87em; line-height: 1.6; }
 .para.open .orig, body.show-orig .para .orig { display: block; }
 .para.open { border-left-color: var(--accent); }
@@ -133,13 +134,19 @@ img.math { vertical-align: middle; max-width: 100%; }
 .ptable { border-collapse: collapse; font-size: 13px; line-height: 1.5; margin: 0.2em 0; }
 .ptable th, .ptable td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .ptable img.math { max-width: none; }
-.ptable td:has(img.math) { white-space: nowrap; }
+.ptable td:has(img.math), .ptable td:has(math) { white-space: nowrap; }
 .ptable th { border-bottom: 2px solid var(--muted); font-weight: 700; }
 .para.table.pending .ja { color: inherit; background: none; }
 .para.table.pending .ptable { opacity: 0.55; }
 .para.table .orig img.math { height: auto !important; width: 100%; }
 .para.eq { cursor: default; text-align: center; margin: 0.4em 0 1em; }
 .para.eq img.math { max-width: 100%; object-fit: contain; }
+math { font-family: "Cambria Math", "STIX Two Math", serif; }
+.para.eq.built { cursor: pointer; text-align: left; }
+.eqline { display: flex; align-items: center; gap: 8px; }
+.eqline math { flex: 1; min-width: 0; }
+.eqno { flex: none; color: var(--muted); font-size: 0.9em; }
+.para.eq .orig { text-align: center; }
 @media screen and (prefers-color-scheme: dark) {
   img.math { filter: invert(1); }
 }

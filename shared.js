@@ -48,7 +48,7 @@
     return (j.choices?.[0]?.message?.content || "").trim();
   }
 
-  const PREFS = { target: "ja", mode: "replace" };
+  const PREFS = { target: "ja", mode: "replace", math: "mathml" };
   async function prefs() {
     if (globalThis.chrome?.storage?.sync) return { ...PREFS, ...(await chrome.storage.sync.get(PREFS)) };
     return { ...PREFS, ...(globalThis.__plamoTestPrefs || {}) };

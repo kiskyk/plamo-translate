@@ -1,7 +1,7 @@
 // PDF text -> blocks (paragraphs and display equations), with math kept as positioned item groups
 // so the viewer can show it as a crop of the rendered page instead of broken text.
 
-const MATH_FONT = /^(CMMI|CMSY|CMEX|CMBSY|CMMIB|MSBM|MSAM|EUFM|EUSM|EURM|EUEX|RSFS|LMMath|LatinModernMath|STIX.*Math|STIXMath|XITSMath|CambriaMath|TeXGyre.*Math|txmi|txsy|txex|pxmi|pxsy|pxex|rtxmi|ntxmi|ntxsy|zxlmi|esint|wasy|MTMI|MTSY|MTEX|Symbol)/i;
+const MATH_FONT = /^(CMMI|CMSY|CMEX|CMBSY|CMMIB|MSBM|MSAM|EUFM|EUSM|EURM|EURB|EUEX|RSFS|LMMath|LatinModernMath|STIX.*Math|STIXMath|XITSMath|CambriaMath|TeXGyre.*Math|txmi|txsy|txex|pxmi|pxsy|pxex|rtxmi|ntxmi|ntxsy|zxlmi|esint|wasy|MTMI|MTSY|MTEX|Symbol)/i;
 // Roman math fonts: math only when they are not the page's body font (papers set entirely in CM use CMR for text).
 const MATH_ROMAN = /^(CMR|CMBX|LMRoman|LMMono)\d*/i;
 const MATH_CHAR = /[Α-ωϑϕϵ∀-⋿←-⇿⨀-⫿\u{1d400}-\u{1d7ff}√′″±×÷·]/u;
@@ -31,6 +31,8 @@ function mathCharRatio(s) {
 // opList comes from page.getOperatorList(); OPS is pdfjsLib.OPS.
 export function graphicsBoxes(opList, OPS) {
   const out = [];
+  const rules = []; // thin horizontal lines (fraction bars, square root tops); out.rules
+  out.rules = rules;
   let ctm = [1, 0, 0, 1, 0, 0];
   let clip = [-Infinity, -Infinity, Infinity, Infinity]; // plotted curves often run far outside their axes
   const stack = [];
@@ -63,6 +65,8 @@ export function graphicsBoxes(opList, OPS) {
       // a path that is not painted is a clipping path: later drawing is cut to it
       if (paint === OPS.endPath) { clip = cut(toPage(mm[0], mm[1], mm[2], mm[3])); continue; }
       boxOf(mm[0], mm[1], mm[2], mm[3], "path");
+      const [rx0, ry0, rx1, ry1] = toPage(mm[0], mm[1], mm[2], mm[3]);
+      if (rx1 - rx0 > 1 && ry1 - ry0 < 2) rules.push({ x0: rx0, x1: rx1, y: (ry0 + ry1) / 2 });
     } else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintImageMaskXObject) {
       boxOf(0, 0, 1, 1, "image");
     }
@@ -203,6 +207,118 @@ function figureRegions(gfx, items, rotated, pageBox) {
   return { figures: regions.map((r) => ({ kind: "figure", box: r.box, top: r.box[3], h: 10 })), taken };
 }
 
+// Most common size of the running text on the page.
+function bodySize(items) {
+  const votes = new Map();
+  for (const it of items) {
+    if (it.math || !it.str.trim()) continue;
+    const key = it.h.toFixed(1);
+    votes.set(key, (votes.get(key) || 0) + it.str.length);
+  }
+  return Number([...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 0);
+}
+
+// Words inside scripts set in the text font (D_harmful) are math, or they would split the formula.
+// A small word that merely sits next to math on the same baseline (a footnote) is not.
+function markScriptWords(items, body) {
+  const solid = items.filter((i) => i.str.trim());
+  const small = (i) => !i.math && i.h < body * 0.85;
+  const touches = (it, n) => it.x <= n.x + n.w + it.h * 1.5 && it.x + it.w >= n.x - it.h * 1.5 && Math.abs(it.y - n.y) < body * 1.3;
+  const shifted = (it, n) => Math.abs(it.y - n.y) > it.h * 0.1;
+  for (let pass = 0; pass < 2; pass++) {
+    solid.forEach((it, i) => {
+      if (!small(it)) return;
+      for (const n of [solid[i - 1], solid[i + 1]]) {
+        if (n?.math && touches(it, n) && (n.scriptWord || shifted(it, n))) { it.math = true; it.scriptWord = true; return; }
+      }
+    });
+  }
+}
+
+// Marks the author block of a paper's first page (between the title and "Abstract") with `keep`:
+// names and affiliations stay as printed.
+export function markFrontMatter(blocks) {
+  const end = blocks.findIndex((b) => b.kind === "text" && /^(abstract\b|要旨|概要)/i.test(b.text));
+  if (end < 1) return;
+  const head = blocks.slice(0, end);
+  const tallest = Math.max(...head.map((b) => (b.kind === "text" ? b.h : 0)));
+  const title = head.findIndex((b) => b.kind === "text" && b.h === tallest);
+  for (const b of head.slice(title + 1)) if (b.kind === "table" || b.h < tallest * 0.9) b.keep = b.front = true;
+}
+
+const REF_HEADING = /^(\d+\.?\s*|[IVX]+\.\s*)?(references|bibliography|参考文献)$/i;
+
+const REF_END_WORD = /^(appendix|appendices|supplement|acknowledg|checklist|author contributions?|funding|biograph)/i;
+const compact = (s) => s.replace(/\s/g, "");
+
+// A wrapped entry can have one plain line, but not several in a row.
+function isProse(text) {
+  if (text.length < 50 || /\b(19|20)\d{2}[a-z]?\b|arxiv|https?:|\bet al\b|\bpp?\.\s*\d|^\[/i.test(text)) return false;
+  const words = text.split(" ").filter((w) => /^\p{L}/u.test(w));
+  return words.filter((w) => /^\p{Ll}/u.test(w)).length >= words.length * 0.7;
+}
+
+// When unsure this says "ended": text after the list is then translated, which a wrong "not ended" would prevent.
+function endsReferences(lines, i, entryH) {
+  const { text, h } = lines[i];
+  if (h > entryH * 1.08) return true;
+  if (text.length < 80 && REF_END_WORD.test(text)) return true;
+  if (text.length < 70 && !/[.,;:]$/.test(text) && !/,| and /.test(text)
+    && /^([A-Z]|\d{1,2}(\.\d+)*)\.?\s+\p{Lu}\p{Ll}/u.test(text)) return true;
+  return [0, 1, 2].every((k) => lines[i + k] && isProse(lines[i + k].text));
+}
+
+// Locates the reference list: { start, end, endKey } (page numbers, and the start of the first line after it),
+// or null. Pages load in any order, so the whole text is scanned once up front.
+export async function findReferences(pdf) {
+  const lines = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const page = await pdf.getPage(n);
+    const own = [];
+    for (const it of (await page.getTextContent()).items) {
+      const t = it.transform;
+      if (!it.str?.trim() || t[1] || t[2]) continue;
+      const h = Math.hypot(t[2], t[3]) || it.height || 1;
+      const last = own.at(-1);
+      if (last && Math.abs(last.y - t[5]) < last.h * 0.3) { last.text += it.str; last.h = Math.max(last.h, h); }
+      else own.push({ text: it.str, y: t[5], h, n });
+    }
+    for (const ln of own) lines.push({ ...ln, text: ln.text.replace(/\s+/g, " ").trim() });
+  }
+  const at = lines.findIndex((ln) => REF_HEADING.test(ln.text));
+  if (at < 0) return null;
+  const refs = { start: lines[at].n, end: pdf.numPages, endKey: "" };
+  // running headers and page numbers say nothing about where the list ends
+  const pagesOf = new Map();
+  const shape = (ln) => compact(ln.text).replace(/\d/g, "");
+  for (const ln of lines) pagesOf.set(shape(ln), (pagesOf.get(shape(ln)) || new Set()).add(ln.n));
+  const rest = lines.slice(at + 1).filter((ln) => /\p{L}{2}/u.test(ln.text) && pagesOf.get(shape(ln)).size < 2);
+  for (let i = 1; i < rest.length; i++) {
+    if (!endsReferences(rest, i, rest[0].h)) continue;
+    refs.end = rest[i].n;
+    refs.endKey = compact(rest[i].text).slice(0, 30);
+    break;
+  }
+  return refs;
+}
+
+// Marks the entries of the reference list on page `n` with `keep`: author names stay as printed.
+export function markReferences(blocks, n, refs) {
+  if (!refs || n < refs.start || n > refs.end) return;
+  const isText = (b) => b.kind === "text";
+  let from = 0;
+  if (n === refs.start) {
+    from = blocks.findIndex((b) => isText(b) && REF_HEADING.test(b.text)) + 1;
+    if (!from) return;
+  }
+  let to = blocks.length;
+  if (n === refs.end && refs.endKey) {
+    to = blocks.findIndex((b, i) => i >= from && isText(b) && compact(b.text).includes(refs.endKey));
+    if (to < 0) return;
+  }
+  for (const b of blocks.slice(from, to)) if (isText(b)) b.keep = true;
+}
+
 // Call after page.render() has finished, so that font names are available.
 // gfx: graphicsBoxes(...) of the page (optional; without it only rotated labels make figures).
 export function blocksFromPage(page, tc, gfx = []) {
@@ -229,6 +345,7 @@ export function blocksFromPage(page, tc, gfx = []) {
     const s = it.str.trim();
     it.math = !!s && (MATH_FONT.test(it.font) || (MATH_ROMAN.test(it.font) && it.font !== body) || mathCharRatio(s) >= 0.5);
   }
+  markScriptWords(items, bodySize(items));
 
   // items -> lines
   const lines = [];
@@ -241,7 +358,10 @@ export function blocksFromPage(page, tc, gfx = []) {
       // (x within a few chars of the line end, so the next column of a two-column page is not glued on)
       const sameLine = Math.abs(it.y - cur.y) < Math.max(it.h, cur.h || it.h) * 0.3
         && it.x >= cur.endX - it.h && it.x <= cur.endX + it.h * 1.5;
-      if (!sameLine) { lines.push(cur); cur = null; }
+      // a subscript drawn after its superscript starts back under it
+      const lineH = cur.h || Math.max(...cur.items.map((i) => i.h)); // cur.h is 0 while the line holds only math
+      const underScript = it.math && it.h < lineH * 0.85 && Math.abs(it.y - cur.y) < lineH * 0.8 && it.x >= cur.x && it.x <= cur.endX + it.h * 1.5;
+      if (!sameLine && !underScript) { lines.push(cur); cur = null; }
       eolPending = false;
     }
     if (cur && cur.items.length && Math.abs(it.y - cur.y) > Math.max(it.h, cur.h) * 0.6 && !(it.math || cur.lastMath)) {
@@ -329,7 +449,7 @@ function finishLine(ln) {
   let allChars = 0;
   for (const it of its) {
     const s = it.str;
-    const n = s.replace(/\s/g, "").length;
+    const n = it.scriptWord ? 0 : s.replace(/\s/g, "").length; // says nothing about whether the line is a formula
     allChars += n;
     if (it.math) mathChars += n;
     const last = parts[parts.length - 1];
@@ -467,12 +587,14 @@ function findTables(lines) {
   // A row is cells split by wide gaps (1.5em). Tightly set numeric tables use narrower gaps (0.6em):
   // those count only with 3+ cells of which 2+ are numbers, so reference lists and formulas stay text.
   const NUM = /^[-–—+±~≈<>≤≥]?\d[\d.,]*%?(\s*±\s*[\d.]+)?$|^[-–—]$/;
-  const segs = lines.map((ln) => {
+  const numericCells = lines.map((ln) => segments(ln, 0.6).filter((s) => NUM.test(s.items.map((i) => i.str).join("").trim())).length);
+  const segs = lines.map((ln, k) => {
     const tight = segments(ln, 0.6);
-    const numeric = tight.filter((s) => NUM.test(s.items.map((i) => i.str).join("").trim())).length;
-    return tight.length >= 3 && numeric >= 2 ? tight : segments(ln, 1.5);
+    return tight.length >= 3 && numericCells[k] >= 2 ? tight : segments(ln, 1.5);
   });
-  const multi = (k) => segs[k].length >= 2 && !isEqLabelRow(lines[k], segs[k]);
+  // A display set in several parts (two equations side by side) also has wide gaps.
+  const formula = (k) => numericCells[k] < 2 && lines[k].items.some((i) => /^CMEX/i.test(i.font) || (i.math && /[=∼←→]/.test(i.str)));
+  const multi = (k) => segs[k].length >= 2 && !isEqLabelRow(lines[k], segs[k]) && !formula(k);
   const found = new Map();
   let i = 0;
   while (i < lines.length) {
@@ -710,7 +832,7 @@ export function nodesFrom(out, mathImgs) {
   for (let m = re.exec(out); m; m = re.exec(out)) {
     text(out.slice(last, m.index));
     const img = mathImgs[Number(m[1]) - 1];
-    nodes.push(img ? img.cloneNode() : document.createTextNode(m[2]));
+    nodes.push(img ? img.cloneNode(true) : document.createTextNode(m[2]));
     last = re.lastIndex;
   }
   text(out.slice(last));
@@ -719,5 +841,5 @@ export function nodesFrom(out, mathImgs) {
 
 export function partsNodes(parts, mathImgs) {
   let k = 0;
-  return parts.map((p) => (p.t === "text" ? document.createTextNode(p.s) : mathImgs[k++].cloneNode()));
+  return parts.map((p) => (p.t === "text" ? document.createTextNode(p.s) : mathImgs[k++].cloneNode(true)));
 }

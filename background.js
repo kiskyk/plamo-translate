@@ -17,8 +17,10 @@ function native(msg) {
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendNativeMessage(HOST, msg, (r) => {
-        if (chrome.runtime.lastError) resolve({ ok: false, up: false, log: chrome.runtime.lastError.message, noHost: true });
-        else resolve(r);
+        if (chrome.runtime.lastError) {
+          console.warn("native host:", chrome.runtime.lastError.message);
+          resolve({ ok: false, up: false, log: chrome.runtime.lastError.message, noHost: true });
+        } else resolve(r);
       });
     } catch (e) {
       resolve({ ok: false, up: false, log: String(e), noHost: true });
@@ -51,7 +53,8 @@ async function ensureServer(size) {
     }).finally(() => { starting = null; });
   }
   const r = await starting;
-  return { ok: !!(r?.ok && r.up), model: r?.model || "", noHost: r?.noHost, log: r?.log || "" };
+  // up with another size: the requested file was missing and the running server was left alone
+  return { ok: !!(r?.ok && r.up && String(r.model).includes(`-${size}-`)), model: r?.model || "", noHost: r?.noHost, log: r?.log || "" };
 }
 
 async function stopServer() {
@@ -144,6 +147,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     serverUp().then((st) => sendResponse({ ok: st.up, model: st.model }));
     return true;
   }
+  if (msg?.type === "stop") {
+    stopServer().then(sendResponse);
+    return true;
+  }
   if (msg?.type === "ensure") {
     settings().then(async (s) => {
       const st = await serverUp();
@@ -215,15 +222,22 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "translate-selection") translateSelection(tab).catch(console.error);
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({ id: "page", title: "このページを翻訳 / 元に戻す", contexts: ["page"] });
-  chrome.contextMenus.create({ id: "selection", title: "選択した文を翻訳", contexts: ["selection"] });
-  chrome.contextMenus.create({ id: "pdf-link", title: "リンク先の PDF を翻訳ビューアで開く", contexts: ["link"] });
-  chrome.contextMenus.create({ id: "viewer", title: "PDF 翻訳ビューアを開く（ファイルを選ぶ）", contexts: ["action"] });
-  chrome.contextMenus.create({ id: "start-2b", title: "翻訳サーバーを起動（2B・速い）", contexts: ["action"] });
-  chrome.contextMenus.create({ id: "start-8b", title: "翻訳サーバーを起動（8B・丁寧）", contexts: ["action"] });
-  chrome.contextMenus.create({ id: "stop", title: "翻訳サーバーを止める（VRAM を空ける）", contexts: ["action"] });
-});
+function createMenus() {
+  chrome.contextMenus.removeAll(() => {
+    // Keep the action items first: Vivaldi's button menu lists every context and cuts off after ACTION_MENU_TOP_LEVEL_LIMIT.
+    chrome.contextMenus.create({ id: "viewer", title: "PDF 翻訳ビューアを開く（ファイルを選ぶ）", contexts: ["action"] });
+    chrome.contextMenus.create({ id: "start", title: "翻訳サーバーを起動", contexts: ["action"] });
+    for (const [size, note] of [["0.8b", "いちばん軽い"], ["2b", "速い"], ["8b", "丁寧"], ["31b", "いちばん大きい"]]) {
+      chrome.contextMenus.create({ id: "start-" + size, parentId: "start", title: `${size.toUpperCase()}（${note}）`, contexts: ["action"] });
+    }
+    chrome.contextMenus.create({ id: "stop", title: "翻訳サーバーを止める（VRAM を空ける）", contexts: ["action"] });
+    chrome.contextMenus.create({ id: "page", title: "このページを翻訳 / 元に戻す", contexts: ["page"] });
+    chrome.contextMenus.create({ id: "selection", title: "選択した文を翻訳", contexts: ["selection"] });
+    chrome.contextMenus.create({ id: "pdf-link", title: "リンク先の PDF を翻訳ビューアで開く", contexts: ["link"] });
+  });
+}
+chrome.runtime.onInstalled.addListener(createMenus);
+chrome.runtime.onStartup.addListener(createMenus);
 
 async function badge(text, color) {
   await chrome.action.setBadgeBackgroundColor({ color: color || "#2ea06e" });
@@ -233,11 +247,11 @@ async function badge(text, color) {
 async function menuServer(id) {
   await badge("…", "#888888");
   const r = id === "stop" ? await stopServer() : await ensureServer(id.slice(6));
-  const ok = id === "stop" ? !r?.up : r?.ok;
+  const ok = id === "stop" ? r?.ok && !r.up : r?.ok;
   await badge(ok ? (id === "stop" ? "" : id.slice(6).toUpperCase()) : "!", ok ? undefined : "#c0392b");
   if (!ok) {
     const why = r?.noHost
-      ? "中継プログラムが未登録です。拡張機能のフォルダの host\\install.ps1 を一度実行してください"
+      ? "中継プログラムを呼び出せません（" + (r?.log || "") + "）。host\\install.ps1 を一度実行してください"
       : "サーバーの操作に失敗しました: " + (r?.log || "").slice(0, 200);
     await chrome.action.setTitle({ title: why }); // shown when hovering the button
   } else {

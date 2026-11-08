@@ -1,4 +1,4 @@
-﻿param([ValidateSet("0.8b", "2b", "8b")][string]$Size = "2b", [int]$Port = 11437)
+﻿param([ValidateSet("0.8b", "2b", "8b", "31b")][string]$Size = "2b", [int]$Port = 11437)
 # Starts llama-server with PLaMo 3 Translate. Paths come from config.json next to this script
 # (copy config.example.json). Needs llama.cpp b11946 or later (plamo3 tokenizer).
 $cfgPath = Join-Path $PSScriptRoot "config.json"
@@ -28,7 +28,8 @@ $cmdline = "cmd.exe /c `"`"$exe`" $args_ > `"$log.log`" 2> `"$log.err`"`""
 $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdline; ProcessStartupInformation = $startup }
 if ($r.ReturnValue -ne 0) { "failed to launch llama-server (Win32_Process.Create returned $($r.ReturnValue))"; exit 1 }
-foreach ($i in 1..60) {
+foreach ($i in 1..300) {
     try { Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2 | Out-Null; "up ($Size, port $Port)"; exit 0 } catch { Start-Sleep 1 }
+    if (-not (Get-Process -Id $r.ProcessId -ErrorAction SilentlyContinue)) { break }
 }
 "failed (see $log.err)"; exit 1

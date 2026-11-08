@@ -23,9 +23,11 @@ $manifest = Join-Path $PSScriptRoot "$name.json"
     type            = "stdio"
     allowed_origins = @("chrome-extension://$ExtensionId/")
 } | ConvertTo-Json | Set-Content -Encoding ascii $manifest
-foreach ($root in "HKCU:\Software\Google\Chrome", "HKCU:\Software\Vivaldi", "HKCU:\Software\Microsoft\Edge") {
-    $key = "$root\NativeMessagingHosts\$name"
-    New-Item -Force $key | Out-Null
-    Set-Item $key -Value $manifest
+foreach ($browser in "Google\Chrome", "Chromium", "Vivaldi", "Microsoft\Edge") {
+    $key = "HKCU\Software\$browser\NativeMessagingHosts\$name"
+    # Through WMI: from a shell inside a packaged (MSIX) app, a direct write goes to that app's private registry, which browsers cannot see.
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "reg.exe add `"$key`" /ve /t REG_SZ /d `"$manifest`" /f" }
+    if ($r.ReturnValue -ne 0) { "failed: $key"; exit 1 }
+    Wait-Process -Id $r.ProcessId -ErrorAction SilentlyContinue
     "registered: $key"
 }

@@ -64,11 +64,19 @@
     </select>
   </div>
   <div class="field">
+    <label for="math">PDF の数式の表示</label>
+    <select id="math">
+      <option value="mathml">文字として組み直す（読めない式は画像のまま）</option>
+      <option value="image">元のページの画像のまま</option>
+    </select>
+  </div>
+  <div class="field">
     <label for="size">自動で起動するモデル</label>
     <select id="size">
+      <option value="0.8b">0.8B（いちばん軽い・ファイル約 0.6 GB）</option>
       <option value="2b">2B（速い・VRAM 約 2.4 GB）</option>
       <option value="8b">8B（少し丁寧・VRAM 約 4.4 GB）</option>
-      <option value="0.8b">0.8B（いちばん軽い・要ダウンロード）</option>
+      <option value="31b">31B（いちばん大きい・ファイル約 20 GB）</option>
     </select>
   </div>
   <div class="field">
