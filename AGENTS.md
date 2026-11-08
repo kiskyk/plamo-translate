@@ -1,6 +1,18 @@
 # このリポジトリで作業するエージェントへ
 
-ローカルの PLaMo 3 Translate（llama-server）で Web ページと PDF を訳す Chromium 拡張機能（Manifest V3）。使い方・機能の説明は `README.md`。ここには、開発するときの決まりと落とし穴だけを書く。
+ローカルの PLaMo 3 Translate（llama-server）で Web ページと PDF を訳す Chromium 拡張機能（Manifest V3）。使い方・機能の説明は `README.md`。
+
+## 最初にすること: 使える状態か確かめる
+
+クローン・フォークした直後や、利用者に「構築して」「セットアップして」「動くようにして」と頼まれたときは、まず次を実行する。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server\check.ps1 -NoStart
+```
+
+`READY` でなければ、`SETUP.md` の手順を上から進めて揃える（llama.cpp b11946 以降・モデル・`server\config.json`・中継プログラムの登録・ブラウザへの読み込み）。最後に `-NoStart` なしで `server\check.ps1` を実行し、実際に1文訳せて `READY` になったら構築は完了。ダウンロードの置き場所と、ブラウザへの読み込み（人の操作）は利用者に頼む。
+
+以下は、コードを直すときの決まりと落とし穴。
 
 ## 作り
 

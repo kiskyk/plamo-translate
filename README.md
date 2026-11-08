@@ -17,6 +17,8 @@
 
 ## 準備
 
+細かい手順（llama.cpp の選び方・確かめ方・困ったとき）は [SETUP.md](SETUP.md)。コーディングエージェントに「SETUP.md のとおりに構築して」と頼んでもよい。揃ったかどうかは `server\check.ps1` で確かめられる（最後に `READY` と出れば使える）。
+
 1. モデルを落とす。Hugging Face の [pfnet/plamo-3-translate-2b-GGUF](https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF)・[pfnet/plamo-3-translate-8b-GGUF](https://huggingface.co/pfnet/plamo-3-translate-8b-GGUF) から `plamo-3-translate-2b-Q4_K_M.gguf`（使うなら 8B も）を1つのフォルダに置く
 2. サーバーの設定を書く。`server\config.example.json` を `server\config.json` に写して、`llamaServer`（llama-server.exe の場所）と `modelDir`（モデルのフォルダ）を書き換える。`logDir` を空にすると `server\logs\` にログが出る
 3. 中継プログラムを登録する（PC ごとに1回。管理者権限は要らない）
@@ -73,7 +75,8 @@
 | `viewer.*` / `pdftext.js` | PDF 翻訳ビューア。`pdftext.js` は PDF の文字と描画命令を段落・数式・表・図に分け、`viewer.js` は描画と翻訳の受け渡しをする。PDF の描画は `vendor/pdfjs`（pdfjs-dist 5.7.284、Apache-2.0） |
 | `options.*` | 設定（サーバーの URL、訳す先の言語、表示の仕方、自動起動・自動停止） |
 | `host/` | 中継プログラム（`host.py`）と登録スクリプト `install.ps1` |
-| `server/` | llama-server の起動・停止スクリプトと設定の例 |
+| `server/` | llama-server の起動・停止スクリプト、設定の例、使える状態かの点検（`check.ps1`） |
+| `SETUP.md` | 新しい PC で使える状態にする手順 |
 | `test/` | 動作確認用のページと解析ツール（下記） |
 | `AGENTS.md` / `CLAUDE.md` | 開発するエージェント（Codex・Claude Code など）向けの決まりと落とし穴。`CLAUDE.md` は `AGENTS.md` を読み込むだけ |
 
