@@ -4,45 +4,82 @@
   <meta charset="utf-8">
   <title>PLaMo Translate の設定</title>
   <style>
-    body { font: 14px/1.7 "BIZ UDPGothic", "Yu Gothic UI", sans-serif; margin: 16px; min-width: 360px; }
-    label { display: block; margin: 0 0 12px; }
-    input, select { display: block; margin-top: 4px; width: 100%; padding: 5px 8px; border: 1px solid #c5cbd0; border-radius: 6px; font: inherit; }
-    #saved { color: #1b6b48; min-height: 1.5em; }
+    :root {
+      --bg: #ffffff; --ink: #1d2124; --muted: #535c64; --line: #8a939b; --field: #ffffff;
+      --accent: #2ea06e; --ok: #1b6b48; --danger: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #24282c; --ink: #e6e9eb; --muted: #a7b0b8; --line: #6a737b; --field: #2a2f33;
+        --accent: #3dbb84; --ok: #7fd8ae; --danger: #ff9a90;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: light dark; }
+    body { font: 14px/1.6 "BIZ UDPGothic", "Yu Gothic UI", sans-serif; margin: 0; padding: 16px; min-width: 380px; background: var(--bg); color: var(--ink); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .field { margin: 0 0 16px; }
+    .field > label, .check { display: block; font-weight: 700; }
+    .check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    .check input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+    .help { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+    input[type=text], input[type=number], select {
+      display: block; margin-top: 4px; width: 100%; height: 34px; padding: 4px 8px;
+      border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: inherit; font: inherit;
+    }
+    .serverline { display: flex; gap: 8px; margin-top: 4px; }
+    .serverline input { margin-top: 0; }
+    button {
+      flex: none; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px;
+      background: var(--field); color: inherit; font: inherit; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    #status { min-height: 1.6em; margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
+    #status.ok { color: var(--ok); }
+    #status.ng { color: var(--danger); }
+    #saved { min-height: 1.6em; margin: 0; color: var(--ok); }
   </style>
 </head>
 <body>
-  <label>翻訳サーバー
-    <input id="server" placeholder="http://127.0.0.1:11437">
-  </label>
-  <label>訳す先の言語
+  <div class="field">
+    <label for="server">翻訳サーバー</label>
+    <div class="serverline">
+      <input id="server" type="text" spellcheck="false" placeholder="http://127.0.0.1:11437" aria-describedby="status">
+      <button id="test">接続を確認</button>
+    </div>
+    <p id="status" role="status"></p>
+  </div>
+  <div class="field">
+    <label for="target">訳す先の言語</label>
     <select id="target">
       <option value="ja">日本語（外国語の部分だけ訳す）</option>
       <option value="en">英語（日本語の部分だけ訳す）</option>
     </select>
-  </label>
-  <label>Web ページの表示
+  </div>
+  <div class="field">
+    <label for="mode">Web ページの表示</label>
     <select id="mode">
-      <option value="replace">元の文を訳文に置き換える（マウスを乗せると原文）</option>
+      <option value="replace">元の文を訳文に置き換える（カーソルを乗せると原文）</option>
       <option value="dual">原文の下に訳文を足す</option>
     </select>
-  </label>
-  <label>自動で起動するモデル
+  </div>
+  <div class="field">
+    <label for="size">自動で起動するモデル</label>
     <select id="size">
-      <option value="2b">2B（速い・VRAM 約2.4GB）</option>
-      <option value="8b">8B（少し丁寧・VRAM 約4.4GB）</option>
+      <option value="2b">2B（速い・VRAM 約 2.4 GB）</option>
+      <option value="8b">8B（少し丁寧・VRAM 約 4.4 GB）</option>
       <option value="0.8b">0.8B（いちばん軽い・要ダウンロード）</option>
     </select>
-  </label>
-  <label>サーバーが止まっていたら自動で起動する
-    <select id="autoStart">
-      <option value="true">する</option>
-      <option value="false">しない</option>
-    </select>
-  </label>
-  <label>使わないとき自動で止めるまでの分（0 で止めない。拡張機能が起動したときだけ止める）
-    <input id="idleStopMin" type="number" min="0" step="5">
-  </label>
-  <div id="saved"></div>
+  </div>
+  <div class="field">
+    <label class="check"><input id="autoStart" type="checkbox"> サーバーが止まっていたら自動で起動する</label>
+  </div>
+  <div class="field">
+    <label for="idleStopMin">使わないときに自動で止めるまでの時間（分）</label>
+    <input id="idleStopMin" type="number" min="0" step="5" aria-describedby="idleHelp">
+    <p class="help" id="idleHelp">0 で止めません。止めるのは拡張機能が起動したサーバーだけです。</p>
+  </div>
+  <p id="saved" role="status"></p>
   <script src="options.js"></script>
 </body>
 </html>

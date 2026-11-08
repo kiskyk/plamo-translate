@@ -2,6 +2,7 @@
 const DEFAULTS = { server: "http://127.0.0.1:11437", target: "ja", size: "2b", autoStart: true, idleStopMin: 30 };
 const MAX_PARALLEL = 4; // matches -np 4 in start-plamo.ps1
 const HOST = "com.plamo.translate_host"; // registered by host/install.ps1
+const IDLE_TITLE = "このページを翻訳（PDF なら翻訳ビューアで開く）";
 
 const cache = new Map();
 const queue = [];
@@ -71,7 +72,10 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== "idle-stop") return;
   if (running || queue.length) { chrome.alarms.create("idle-stop", { delayInMinutes: 5 }); return; }
   const { startedByExt } = await chrome.storage.session.get({ startedByExt: false });
-  if (startedByExt) await stopServer(); // leave servers the user started by hand alone
+  if (startedByExt) { // leave servers the user started by hand alone
+    await stopServer();
+    await chrome.action.setBadgeText({ text: "" });
+  }
 });
 
 function pump() {
@@ -129,6 +133,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     );
     return true;
   }
+  if (msg?.type === "page-state" && _sender.tab?.id) {
+    const tabId = _sender.tab.id;
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#1b7a52" });
+    chrome.action.setBadgeText({ tabId, text: msg.on ? "訳" : null });
+    chrome.action.setTitle({ tabId, title: msg.on ? "翻訳を解除して元に戻す" : IDLE_TITLE });
+    return;
+  }
   if (msg?.type === "health") {
     serverUp().then((st) => sendResponse({ ok: st.up, model: st.model }));
     return true;
@@ -164,21 +175,49 @@ async function isPdfTab(tab) {
   }
 }
 
+// Browser pages (settings, the extension store) refuse scripts; say so on the button.
+async function cannotTranslate(tab) {
+  if (!tab?.id) return;
+  await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#b3261e" });
+  await chrome.action.setBadgeText({ tabId: tab.id, text: "×" });
+  await chrome.action.setTitle({ tabId: tab.id, title: "このページは翻訳できません（ブラウザの管理ページなど）" });
+}
+
+async function inject(tab) {
+  await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["content.css"] });
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["shared.js", "content.js"] });
+}
+
 async function togglePage(tab) {
-  if (!tab?.id || !/^(https?|file):/.test(tab.url || "")) return;
+  if (!tab?.id || !/^(https?|file):/.test(tab.url || "")) { await cannotTranslate(tab); return; }
   if (await isPdfTab(tab)) {
     await chrome.tabs.update(tab.id, { url: viewerUrl(tab.url) });
     return;
   }
-  await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["content.css"] });
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["shared.js", "content.js"] });
+  try {
+    await inject(tab);
+  } catch {
+    await cannotTranslate(tab);
+    return;
+  }
   await chrome.tabs.sendMessage(tab.id, { type: "toggle" });
+}
+
+async function translateSelection(tab, text) {
+  if (!tab?.id || !/^(https?|file):/.test(tab.url || "")) { await cannotTranslate(tab); return; }
+  await inject(tab);
+  await chrome.tabs.sendMessage(tab.id, { type: "translate-selection", text });
 }
 
 chrome.action.onClicked.addListener((tab) => { togglePage(tab).catch(console.error); });
 
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command === "translate-selection") translateSelection(tab).catch(console.error);
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: "page", title: "このページを翻訳 / 元に戻す", contexts: ["page"] });
+  chrome.contextMenus.create({ id: "selection", title: "選択した文を翻訳", contexts: ["selection"] });
   chrome.contextMenus.create({ id: "pdf-link", title: "リンク先の PDF を翻訳ビューアで開く", contexts: ["link"] });
   chrome.contextMenus.create({ id: "viewer", title: "PDF 翻訳ビューアを開く（ファイルを選ぶ）", contexts: ["action"] });
   chrome.contextMenus.create({ id: "start-2b", title: "翻訳サーバーを起動（2B・速い）", contexts: ["action"] });
@@ -198,17 +237,18 @@ async function menuServer(id) {
   await badge(ok ? (id === "stop" ? "" : id.slice(6).toUpperCase()) : "!", ok ? undefined : "#c0392b");
   if (!ok) {
     const why = r?.noHost
-      ? "中継プログラムが登録されていないよ。拡張機能のフォルダの host\\install.ps1 を一度実行してね"
-      : "サーバーの操作に失敗したよ: " + (r?.log || "").slice(0, 200);
+      ? "中継プログラムが未登録です。拡張機能のフォルダの host\\install.ps1 を一度実行してください"
+      : "サーバーの操作に失敗しました: " + (r?.log || "").slice(0, 200);
     await chrome.action.setTitle({ title: why }); // shown when hovering the button
   } else {
-    await chrome.action.setTitle({ title: "このページを翻訳（PDF なら翻訳ビューアで開く）" });
+    await chrome.action.setTitle({ title: IDLE_TITLE });
   }
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (/^(start-|stop)/.test(info.menuItemId)) { menuServer(info.menuItemId).catch(console.error); return; }
   if (info.menuItemId === "page") togglePage(tab).catch(console.error);
+  if (info.menuItemId === "selection") translateSelection(tab, info.selectionText).catch(console.error);
   if (info.menuItemId === "pdf-link") chrome.tabs.create({ url: viewerUrl(info.linkUrl) });
   if (info.menuItemId === "viewer") chrome.tabs.create({ url: chrome.runtime.getURL("viewer.html") });
 });

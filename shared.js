@@ -2,8 +2,14 @@
 (() => {
   if (globalThis.Plamo) return;
 
-  const JA = /[぀-ヿ㐀-鿿ｦ-ﾟ]/g;
+  const JA = /[぀-ヿ㐀-鿿ｦ-ﾟ]/;
+  const JA_ALL = new RegExp(JA.source, "g");
   const KANA = /[぀-ヿ]/;
+
+  function isJapanese(text) {
+    const letters = text.match(/\p{L}/gu);
+    return !!letters && (KANA.test(text) || (text.match(JA_ALL) || []).length / letters.length > 0.3);
+  }
 
   function shouldTranslate(text, target = "ja") {
     const t = text.trim();
@@ -11,9 +17,8 @@
     const letters = t.match(/\p{L}/gu);
     if (!letters || letters.length < 2) return false;
     if (!/\s/.test(t) && /[\/_.@=]/.test(t) && t.length > 12) return false; // URL, path, identifier
-    const ja = (t.match(JA) || []).length;
-    if (target === "ja") return !(KANA.test(t) || ja / letters.length > 0.3);
-    return ja > 0;
+    if (target === "ja") return !isJapanese(t);
+    return JA.test(t);
   }
 
   // Inside the extension this goes through background.js (queue + cache).
@@ -52,5 +57,5 @@
     return (await prefs()).target;
   }
 
-  globalThis.Plamo = { shouldTranslate, translate, target, prefs };
+  globalThis.Plamo = { shouldTranslate, isJapanese, translate, target, prefs };
 })();

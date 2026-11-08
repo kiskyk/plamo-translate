@@ -1,39 +1,76 @@
 import * as pdfjsLib from "./vendor/pdfjs/pdf.min.mjs";
-import { blocksFromPage, graphicsBoxes, makeCropper, figureImg, sourceOf, nodesFrom, partsNodes } from "./pdftext.js";
+import { blocksFromPage, graphicsBoxes, makeCropper, figureImg, sourceOf, sourceBoxes, nodesFrom, partsNodes } from "./pdftext.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", import.meta.url).href;
 
 const $ = (id) => document.getElementById(id);
 const pagesEl = $("pages");
+const inExtension = !!globalThis.chrome?.runtime?.id;
 let target = "ja";
-let total = 0;
-let paraTotal = 0;
-let paraDone = 0;
-let doc = null; // { pdf, name, rows }
+let doc = null; // { pdf, name, rows, paraTotal, paraDone, pagesLoaded, failed, meter }
 // "print" intent: rendering does not wait for requestAnimationFrame, which never fires in a
 // background tab, so pages keep loading while the user is elsewhere.
 const INTENT = "print";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- server status ----
+function modelLabel(file) {
+  const m = /-(\d+(?:\.\d+)?b)-/i.exec(file || "");
+  return m ? "PLaMo " + m[1].toUpperCase() : "接続中";
+}
+
 async function checkServer(start = false) {
   const el = $("server");
+  const button = $("startServer");
   try {
     let model;
-    if (globalThis.chrome?.runtime?.id) {
-      if (start) { el.textContent = "翻訳サーバーを起動中…"; el.className = "server"; }
+    if (inExtension) {
+      if (start) { el.textContent = "サーバーを起動中…"; el.className = "server"; button.hidden = true; }
       const r = await chrome.runtime.sendMessage({ type: start ? "ensure" : "health" });
-      if (!r?.ok) throw new Error();
+      if (!r?.ok) throw Object.assign(new Error(), { noHost: r?.noHost });
       model = r.model;
     } else {
       const r = await fetch("http://127.0.0.1:11437/props");
       model = String((await r.json()).model_path || "").split(/[\\/]/).pop();
     }
-    el.textContent = (model || "接続中").replace(/\.gguf$/, "");
+    el.textContent = modelLabel(model);
+    el.title = (model || "").replace(/\.gguf$/, "");
     el.className = "server ok";
-  } catch {
-    el.textContent = "サーバー未起動（ボタンを右クリック →「翻訳サーバーを起動」）";
+    button.hidden = true;
+    return true;
+  } catch (e) {
+    el.textContent = e.noHost ? "起動用の中継が未登録" : "サーバー停止中";
+    el.title = e.noHost ? "host\\install.ps1 を一度実行してください" : "翻訳サーバーに接続できません";
     el.className = "server ng";
+    button.hidden = false;
+    return false;
   }
+}
+
+// ---- messages in place of the pages ----
+function notice(title, hint) {
+  document.title = "PDF 翻訳ビューア";
+  $("name").textContent = "PDF 翻訳ビューア";
+  const box = document.createElement("section");
+  box.className = "drop notice";
+  const t = document.createElement("p");
+  t.className = "notice-title";
+  t.textContent = title;
+  const b = document.createElement("button");
+  b.className = "btn primary";
+  b.dataset.pick = "";
+  b.textContent = "別の PDF を選ぶ";
+  const h = document.createElement("p");
+  h.className = "hint";
+  h.textContent = hint || "";
+  box.append(t, b, h);
+  pagesEl.replaceChildren(box);
+}
+
+function describeLoadError(e) {
+  if (e?.name === "PasswordException") return ["パスワード付きの PDF は開けません。", "パスワードを解除した PDF をドロップしてください。"];
+  if (e?.name === "InvalidPDFException") return ["PDF として読み込めませんでした。", "ファイルが壊れているか、PDF ではない可能性があります。"];
+  return ["PDF を読み込めませんでした。", String(e?.message || e)];
 }
 
 // ---- loading ----
@@ -53,62 +90,179 @@ async function bytesFromUrl(url) {
   return r.arrayBuffer();
 }
 
+async function openFile(file) {
+  try {
+    await open(await file.arrayBuffer(), file.name);
+  } catch (e) {
+    doc = null;
+    resetBar();
+    notice(...describeLoadError(e));
+  }
+}
+
+function resetBar() {
+  $("export").disabled = true;
+  $("pager").hidden = true;
+  $("meter").hidden = true;
+  $("retry").hidden = true;
+  $("progress").textContent = "";
+}
+
+let pageWatcher = null;
+
 async function open(data, name) {
-  pagesEl.innerHTML = "";
+  const pdf = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
+  pagesEl.replaceChildren();
   document.title = name + " - PDF 翻訳ビューア";
   $("name").textContent = name;
-  paraTotal = paraDone = 0;
-  const pdf = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
-  total = pdf.numPages;
+  $("name").title = name;
+  const total = pdf.numPages;
   const first = await pdf.getPage(1);
   const vp = first.getViewport({ scale: 1 });
+  const d = { pdf, name, rows: [], paraTotal: 0, paraDone: 0, pagesLoaded: 0, failed: new Set(), meter: 0 };
+  doc = d;
   const io = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
       io.unobserve(e.target);
-      ensureLoaded(e.target);
+      ensureLoaded(d, e.target);
     }
   }, { rootMargin: "1200px 0px" });
-  const rows = [];
+  pageWatcher?.disconnect();
+  pageWatcher = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) showCurrentPage(Number(e.target.dataset.page));
+  }, { rootMargin: "-45% 0px -55% 0px" });
   for (let i = 1; i <= total; i++) {
     const row = document.createElement("section");
     row.className = "row";
     row.dataset.page = i;
-    row.innerHTML = `<div class="sheet" style="aspect-ratio:${vp.width}/${vp.height}"><span class="no">${i} / ${total}</span></div><div class="tr"></div>`;
+    row.innerHTML = `<div class="sheet" style="aspect-ratio:${vp.width}/${vp.height}"><div class="marks"></div><span class="no">${i} / ${total}</span></div><div class="tr"></div>`;
     pagesEl.appendChild(row);
     io.observe(row);
-    rows.push(row);
+    pageWatcher.observe(row);
+    d.rows.push(row);
   }
-  doc = { pdf, name, rows };
   $("export").disabled = false;
+  $("pager").hidden = false;
+  $("pageNo").max = total;
+  $("pageNo").value = 1;
+  $("pageTotal").textContent = "/ " + total;
+  $("meter").hidden = false;
   progress();
-  prefetch(doc);
+  const fromHash = /^#page=(\d+)$/.exec(location.hash);
+  if (fromHash) goToPage(Number(fromHash[1]));
+  prefetch(d);
+}
+
+function showCurrentPage(n) {
+  if (doc?.pin) return;
+  if (document.activeElement !== $("pageNo")) $("pageNo").value = n;
+  try { history.replaceState(null, "", location.pathname + location.search + "#page=" + n); } catch {}
+}
+
+// Pages above the target grow as they load, so the jump is repeated until they have settled
+// (or the user scrolls on their own).
+function goToPage(n) {
+  const d = doc;
+  if (!d) return;
+  n = Math.min(d.rows.length, Math.max(1, n));
+  const row = d.rows[n - 1];
+  window.scrollTo(0, row.getBoundingClientRect().top + scrollY - document.querySelector(".bar").offsetHeight - 12);
+  d.pin = d.rows.slice(0, n).every((r) => r._done) ? 0 : n;
+  $("pageNo").value = n;
+}
+for (const type of ["wheel", "keydown", "pointerdown", "touchstart"]) {
+  window.addEventListener(type, () => { if (doc) doc.pin = 0; }, { capture: true, passive: true });
 }
 
 // Loads a page once (from scrolling or from the background prefetch, whichever comes first).
-function ensureLoaded(row) {
+function ensureLoaded(d, row) {
   if (!row._loading) {
-    row._loading = loadPage(doc.pdf, Number(row.dataset.page), row).catch((err) => {
-      row.querySelector(".tr").innerHTML = `<p class="err">このページは読めなかったよ: ${String(err.message || err)}</p>`;
+    row._loading = loadPage(d, Number(row.dataset.page), row).catch((err) => {
+      const p = document.createElement("p");
+      p.className = "err";
+      p.textContent = "このページは読み込めませんでした: " + String(err.message || err);
+      row.querySelector(".tr").replaceChildren(p);
+    }).finally(() => {
+      row._done = true;
+      d.pagesLoaded++;
+      progress();
+      if (doc === d && d.pin) goToPage(d.pin);
     });
   }
   return row._loading;
 }
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Translates the rest of the document in the background, page by page, without flooding the
 // translation queue (pages the user scrolls to still get served first).
 async function prefetch(d) {
   for (const row of d.rows) {
     if (doc !== d) return; // another file was opened
-    await ensureLoaded(row);
-    while (doc === d && paraTotal - paraDone > 8) await sleep(300);
+    await ensureLoaded(d, row);
+    while (doc === d && d.paraTotal - d.paraDone > 8) await sleep(300);
   }
 }
 
 function progress() {
-  $("progress").textContent = total ? `${total} ページ・訳 ${paraDone} / ${paraTotal} 段落` : "";
+  const d = doc;
+  if (!d) return;
+  const pages = d.rows.length;
+  const allLoaded = d.pagesLoaded >= pages;
+  const pending = d.paraTotal - d.paraDone;
+  const failed = d.failed.size;
+  const ok = d.paraDone - failed;
+  $("progress").textContent = allLoaded && !pending && !failed
+    ? `${pages} ページ・翻訳完了`
+    : `${pages} ページ・訳 ${ok} / ${d.paraTotal} 段落`;
+  const retry = $("retry");
+  retry.hidden = !failed;
+  retry.textContent = `失敗した ${failed} 段落をやり直す`;
+  const ratio = (d.pagesLoaded / pages) * (d.paraTotal ? d.paraDone / d.paraTotal : 1);
+  d.meter = Math.max(d.meter, ratio);
+  const meter = $("meter");
+  meter.setAttribute("aria-valuenow", Math.round(d.meter * 100));
+  meter.firstElementChild.style.transform = `scaleX(${d.meter})`;
+  meter.style.opacity = d.meter >= 1 ? 0 : 1;
+}
+
+// One translation job of a paragraph or table. Failed jobs stay in d.failed until retried.
+function track(d, div, job) {
+  d.paraTotal++;
+  const entry = { div, run: null };
+  entry.run = () => {
+    div.classList.remove("failed");
+    div.querySelector(":scope > .retry")?.remove();
+    div.classList.add("pending");
+    return job().then(
+      () => { d.failed.delete(entry); },
+      (e) => {
+        d.failed.add(entry);
+        div.classList.add("failed");
+        const b = document.createElement("button");
+        b.className = "btn warn retry";
+        b.textContent = "訳せませんでした。もう一度試す";
+        b.addEventListener("click", (ev) => { ev.stopPropagation(); retry(d, [entry]); });
+        div.appendChild(b);
+        if (String(e.message) === "SERVER_DOWN") checkServer();
+      },
+    ).finally(() => { div.classList.remove("pending"); d.paraDone++; progress(); });
+  };
+  entry.run();
+}
+
+function retry(d, entries = [...d.failed]) {
+  for (const entry of entries) d.failed.delete(entry);
+  d.paraDone -= entries.length;
+  d.meter = 0;
+  for (const entry of entries) entry.run();
+  progress();
+}
+
+async function settled(d, btn) {
+  while (doc === d && d.paraDone < d.paraTotal) {
+    btn.textContent = `訳し終わるのを待っています… ${d.paraDone} / ${d.paraTotal}`;
+    await sleep(500);
+  }
 }
 
 // Shrinks each page's translation until it fits one sheet; below the minimum it may run onto the next sheet.
@@ -138,12 +292,15 @@ async function exportPdf() {
   try {
     for (const row of d.rows) {
       btn.textContent = `ページを準備中… ${row.dataset.page} / ${d.rows.length}`;
-      await ensureLoaded(row);
+      await ensureLoaded(d, row);
     }
-    while (paraDone < paraTotal) {
-      btn.textContent = `訳し終わるのを待っているよ… ${paraDone} / ${paraTotal}`;
-      await sleep(500);
+    await settled(d, btn);
+    if (d.failed.size) {
+      retry(d);
+      await settled(d, btn);
     }
+    if (doc !== d) return;
+    if (d.failed.size && !confirm(`${d.failed.size} 段落を訳せませんでした。その部分は原文のまま保存します。続けますか？`)) return;
     // Sharp page images for paper (the on-screen canvas is only as wide as the column).
     for (const row of d.rows) {
       if (row.querySelector(".print-img")) continue;
@@ -171,7 +328,7 @@ async function exportPdf() {
     document.title = d.name.replace(/\.pdf$/i, "") + "（対訳）";
     document.body.classList.add("print-layout");
     fitRows(d.rows);
-    btn.textContent = "印刷画面で「PDF に保存」を選んでね";
+    btn.textContent = "印刷画面で「PDF に保存」を選んでください";
     window.print(); // blocks until the print dialog is closed
     document.body.classList.remove("print-layout");
     for (const row of d.rows) {
@@ -185,9 +342,84 @@ async function exportPdf() {
   }
 }
 
+// ---- link between a paragraph and where it sits on the page ----
+function marksOf(boxes, base) {
+  return boxes.map((box) => {
+    const [ax, ay, bx, by] = base.convertToViewportRectangle(box);
+    return {
+      l: (Math.min(ax, bx) / base.width) * 100,
+      t: (Math.min(ay, by) / base.height) * 100,
+      w: (Math.abs(bx - ax) / base.width) * 100,
+      h: (Math.abs(by - ay) / base.height) * 100,
+    };
+  });
+}
+
+function drawMarks(row, marks) {
+  row.querySelector(".marks").replaceChildren(...marks.map((m) => {
+    const el = document.createElement("i");
+    el.style.cssText = `left:${m.l}%;top:${m.t}%;width:${m.w}%;height:${m.h}%`;
+    return el;
+  }));
+}
+
+let active = null; // { row, spot }
+function setActive(row, spot, fromSheet) {
+  if (active?.spot === spot) return;
+  if (active) {
+    drawMarks(active.row, []);
+    active.spot.div.classList.remove("linked");
+    active.row.querySelector(".sheet").classList.remove("hit");
+  }
+  active = spot ? { row, spot } : null;
+  if (!spot) return;
+  drawMarks(row, spot.marks);
+  if (fromSheet) {
+    spot.div.classList.add("linked");
+    row.querySelector(".sheet").classList.add("hit");
+  }
+}
+
+function spotAt(row, e) {
+  const r = row.querySelector(".sheet").getBoundingClientRect();
+  const x = ((e.clientX - r.left) / r.width) * 100;
+  const y = ((e.clientY - r.top) / r.height) * 100;
+  const gap = 0.5; // the space between two lines still counts as the paragraph
+  return row._spots?.find((s) => s.marks.some((m) => x >= m.l && x <= m.l + m.w && y >= m.t - gap && y <= m.t + m.h + gap)) || null;
+}
+
+pagesEl.addEventListener("mouseover", (e) => {
+  if (!e.target.closest?.(".tr")) return;
+  const row = e.target.closest(".row");
+  const para = e.target.closest(".para");
+  setActive(row, para && row._spots?.find((s) => s.div === para) || null, false);
+});
+pagesEl.addEventListener("mousemove", (e) => {
+  const sheet = e.target.closest?.(".sheet");
+  if (!sheet) return;
+  const row = sheet.closest(".row");
+  setActive(row, spotAt(row, e), true);
+});
+pagesEl.addEventListener("mouseleave", () => setActive(null, null));
+pagesEl.addEventListener("click", (e) => {
+  const sheet = e.target.closest?.(".sheet");
+  if (!sheet) return;
+  const row = sheet.closest(".row");
+  const spot = spotAt(row, e);
+  if (spot) spot.div.scrollIntoView({ block: "nearest" });
+});
+
+function toggleOriginal(div) {
+  div.addEventListener("click", () => {
+    if (String(getSelection())) return; // selecting text to copy is not a click on the paragraph
+    div.classList.toggle("open");
+  });
+}
+
 // ---- one page ----
-async function loadPage(pdf, n, row) {
-  const page = await pdf.getPage(n);
+async function loadPage(d, n, row) {
+  if (doc !== d) return;
+  const page = await d.pdf.getPage(n);
   const sheet = row.querySelector(".sheet");
   const cssWidth = sheet.clientWidth || 700;
   const base = page.getViewport({ scale: 1 });
@@ -220,7 +452,9 @@ async function loadPage(pdf, n, row) {
     pix = { canvas: hi, vp: hvp };
   }
   const tr = row.querySelector(".tr");
-  if (!blocks.length) tr.innerHTML = `<p class="empty">文字が見つからないページだよ（画像だけのページかも）。</p>`;
+  if (!blocks.length) tr.innerHTML = `<p class="empty">文字が見つからないページです（画像だけのページかもしれません）。</p>`;
+  row._spots = [];
+  const link = (div, boxes) => row._spots.push({ div, marks: marksOf(boxes, base) });
   let prevText = "";
   const figRows = figureRows(blocks.filter((b) => b.kind === "figure"));
   for (const b of blocks) {
@@ -229,13 +463,16 @@ async function loadPage(pdf, n, row) {
     div.className = "para";
     tr.appendChild(div);
     if (b.kind === "table") {
-      renderTable(b, div, crop, prevText);
+      link(div, sourceBoxes(b));
+      renderTable(d, b, div, crop, prevText);
       continue;
     }
     if (b.kind === "figure") {
+      link(div, figRows.get(b).map((f) => f.box));
       renderFigures(figRows.get(b), div, pix, base.width);
       continue;
     }
+    link(div, sourceBoxes(b));
     if (b.kind === "text") prevText = b.text;
     if (b.kind === "eq") {
       div.classList.add("eq");
@@ -250,22 +487,13 @@ async function loadPage(pdf, n, row) {
     orig.className = "orig";
     orig.append(...partsNodes(b.parts, imgs));
     div.append(ja, orig);
-    div.addEventListener("click", () => div.classList.toggle("open"));
+    toggleOriginal(div);
     ja.append(...partsNodes(b.parts, imgs));
     if (!Plamo.shouldTranslate(plain, target)) {
       div.classList.add("keep");
       continue;
     }
-    div.classList.add("pending");
-    paraTotal++;
-    Plamo.translate(src, target).then(
-      (t) => { ja.replaceChildren(...nodesFrom(t, imgs)); div.classList.remove("pending"); },
-      (e) => {
-        div.classList.remove("pending");
-        ja.classList.add("err");
-        if (String(e.message) === "SERVER_DOWN") checkServer();
-      },
-    ).finally(() => { paraDone++; progress(); });
+    track(d, div, () => Plamo.translate(src, target).then((t) => { ja.replaceChildren(...nodesFrom(t, imgs)); }));
   }
   progress();
 }
@@ -315,7 +543,7 @@ function renderFigures(figs, div, pix, pageW) {
 
 // Table: rebuilt as an HTML table. All translatable cells go to the model in one request
 // (<tN> per cell) so short cells are translated with the caption and their neighbours as context.
-function renderTable(b, div, crop, caption) {
+function renderTable(d, b, div, crop, caption) {
   div.classList.add("table");
   const table = document.createElement("table");
   table.className = "ptable";
@@ -340,37 +568,89 @@ function renderTable(b, div, crop, caption) {
   wrap.className = "ja";
   wrap.appendChild(table);
   div.append(wrap, orig);
-  div.addEventListener("click", () => div.classList.toggle("open"));
+  toggleOriginal(div);
   if (!cells.length) return;
-  div.classList.add("pending");
-  paraTotal++;
   const src = cells.map((c, k) => `<t${k + 1}>${c.text.replace(/[<>]/g, "")}</t${k + 1}>`).join("\n");
   const context = caption.slice(0, 400);
-  Plamo.translate(src, target, context).then(
-    (t) => {
-      const re = /<t(\d+)>([\s\S]*?)<\/t\1>/g;
-      for (let m = re.exec(t); m; m = re.exec(t)) {
-        const c = cells[Number(m[1]) - 1];
-        if (c && m[2].trim()) c.td.textContent = m[2].trim();
-      }
-    },
-    () => {},
-  ).finally(() => { div.classList.remove("pending"); paraDone++; progress(); });
+  track(d, div, () => Plamo.translate(src, target, context).then((t) => {
+    const re = /<t(\d+)>([\s\S]*?)<\/t\1>/g;
+    for (let m = re.exec(t); m; m = re.exec(t)) {
+      const c = cells[Number(m[1]) - 1];
+      if (c && m[2].trim()) c.td.textContent = m[2].trim();
+    }
+  }));
 }
 
+// ---- reading comfort ----
+const SIZE_KEY = "plamo.translationSize";
+const SIZE_MIN = 13;
+const SIZE_MAX = 22;
+let trSize = 15;
+
+function applySize() {
+  document.documentElement.style.setProperty("--tr-size", trSize + "px");
+  $("fontDown").disabled = trSize <= SIZE_MIN;
+  $("fontUp").disabled = trSize >= SIZE_MAX;
+}
+
+function changeSize(delta) {
+  trSize = Math.min(SIZE_MAX, Math.max(SIZE_MIN, trSize + delta));
+  applySize();
+  try { localStorage.setItem(SIZE_KEY, String(trSize)); } catch {}
+}
+
+try {
+  const saved = Number(localStorage.getItem(SIZE_KEY));
+  if (saved >= SIZE_MIN && saved <= SIZE_MAX) trSize = saved;
+} catch {}
+applySize();
+
 // ---- wiring ----
+$("fontDown").addEventListener("click", () => changeSize(-1));
+$("fontUp").addEventListener("click", () => changeSize(1));
 $("showOrig").addEventListener("change", (e) => document.body.classList.toggle("show-orig", e.target.checked));
-$("export").addEventListener("click", () => exportPdf().catch((e) => alert("書き出せなかったよ: " + (e.message || e))));
-$("pick").addEventListener("change", async (e) => {
-  const f = e.target.files[0];
-  if (f) open(await f.arrayBuffer(), f.name);
+$("export").addEventListener("click", () => exportPdf().catch((e) => alert("書き出せませんでした: " + (e.message || e))));
+$("retry").addEventListener("click", () => { if (doc) retry(doc); });
+$("startServer").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  const ok = await checkServer(true);
+  e.target.disabled = false;
+  if (ok && doc?.failed.size) retry(doc);
 });
-document.addEventListener("dragover", (e) => { e.preventDefault(); $("drop")?.classList.add("over"); });
-document.addEventListener("dragleave", () => $("drop")?.classList.remove("over"));
-document.addEventListener("drop", async (e) => {
+$("pageNo").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { goToPage(Number(e.target.value)); e.target.blur(); }
+});
+$("pageNo").addEventListener("change", (e) => goToPage(Number(e.target.value)));
+document.addEventListener("click", (e) => {
+  if (e.target.closest?.("[data-pick]")) $("pick").click();
+});
+$("pick").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  e.target.value = ""; // choosing the same file again must fire change
+  if (f) openFile(f);
+});
+
+let dragDepth = 0;
+document.addEventListener("dragenter", (e) => {
   e.preventDefault();
+  dragDepth++;
+  document.body.classList.add("dragging");
+});
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) document.body.classList.remove("dragging");
+});
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("dragging");
   const f = [...e.dataTransfer.files].find((x) => x.type === "application/pdf" || /\.pdf$/i.test(x.name));
-  if (f) open(await f.arrayBuffer(), f.name);
+  if (f) openFile(f);
+  else if (e.dataTransfer.files.length) {
+    if (doc) $("progress").textContent = "開けるのは PDF だけです";
+    else notice("開けるのは PDF だけです。", e.dataTransfer.files[0].name);
+  }
 });
 
 (async () => {
@@ -381,12 +661,12 @@ document.addEventListener("drop", async (e) => {
   const name = decodeURIComponent(file.split(/[?#]/)[0].split("/").pop() || "document.pdf");
   $("name").textContent = name + " を読み込み中…";
   try {
-    open(await bytesFromUrl(file), name);
+    await open(await bytesFromUrl(file), name);
   } catch (e) {
-    $("name").textContent = name;
-    const hint = file.startsWith("file:")
-      ? "ローカルの PDF は、拡張機能の詳細で「ファイルの URL へのアクセスを許可する」をオンにするか、ここにドロップしてね。"
-      : "PDF を取得できなかったよ。ダウンロードしてここにドロップしてね。";
-    $("drop").innerHTML = `<p class="err">${hint}</p><p class="hint">${String(e.message || e)}</p>`;
+    doc = null;
+    resetBar();
+    if (file.startsWith("file:")) notice("ローカルの PDF を読み込めませんでした。", "拡張機能の詳細で「ファイルの URL へのアクセスを許可する」をオンにするか、ここにドロップしてください。");
+    else if (/^HTTP |fetch/i.test(String(e.message))) notice("PDF を取得できませんでした。", "ダウンロードしてここにドロップしてください（" + String(e.message) + "）");
+    else notice(...describeLoadError(e));
   }
 })();

@@ -400,6 +400,7 @@ function group(lines) {
       if (p?.kind === "text" && Math.abs(ln.y - p.y) < p.h * 1.0 && ln.text.length < 40) {
         p.parts = joinParts(p.parts, [{ t: "math", items: solid(ln) }]);
         p.text += " " + ln.text;
+        p.lines.push(ln);
         p.inlineTail = true;
         continue;
       }
@@ -425,6 +426,7 @@ function group(lines) {
         if (p.gap === undefined && !sameLine) p.gap = gap;
         p.text += " " + t;
         p.parts = joinParts(p.parts, ln.parts.map((x) => ({ ...x })));
+        p.lines.push(ln);
         if (!sameLine) p.y = ln.y;
         p.last = ln;
         p.lastEnd = ln.endX;
@@ -433,7 +435,7 @@ function group(lines) {
       }
     }
     if (p) out.push(p);
-    p = { kind: "text", text: t, parts: ln.parts.map((x) => ({ ...x })), x: ln.x, y: ln.y, top: ln.y + ln.h, h: ln.h, last: ln, lastEnd: ln.endX, heading: isHeading(t) };
+    p = { kind: "text", text: t, parts: ln.parts.map((x) => ({ ...x })), x: ln.x, y: ln.y, top: ln.y + ln.h, h: ln.h, last: ln, lines: [ln], lastEnd: ln.endX, heading: isHeading(t) };
   }
   if (p) out.push(p);
   return out;
@@ -664,6 +666,23 @@ export function makeCropper(canvas, vp) {
     img.style.height = (pdfH / (emH || 10)).toFixed(2) + "em";
     return img;
   };
+}
+
+// Where a block sits on its page: boxes [x0, y0, x1, y1] in PDF units (one per line for paragraphs).
+export function sourceBoxes(block) {
+  if (block.kind === "figure") return [block.box];
+  const extent = (items) => {
+    const its = items.filter((i) => i.str.trim());
+    if (!its.length) return null;
+    return [
+      Math.min(...its.map((i) => i.x)),
+      Math.min(...its.map((i) => i.y - i.h * 0.27)),
+      Math.max(...its.map((i) => i.x + i.w)),
+      Math.max(...its.map((i) => i.y + i.h * 0.88)),
+    ];
+  };
+  const groups = block.kind === "text" ? block.lines.map((ln) => ln.items) : [block.items];
+  return groups.map(extent).filter(Boolean);
 }
 
 // Text sent to the model: math parts become <tN>…</tN> so the model keeps them in place.

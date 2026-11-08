@@ -9,22 +9,38 @@
 <body>
   <header class="bar">
     <div class="file">
-      <span id="name">PDF を選んでね</span>
+      <span id="name">PDF 翻訳ビューア</span>
       <span id="progress"></span>
+      <button class="btn warn" id="retry" hidden></button>
     </div>
     <div class="tools">
+      <label class="pager" id="pager" hidden>ページ
+        <input id="pageNo" type="number" min="1" inputmode="numeric" aria-label="移動するページ番号">
+        <span id="pageTotal"></span>
+      </label>
+      <div class="sizer" role="group" aria-label="訳文の文字サイズ">
+        <button class="btn" id="fontDown" aria-label="訳文の文字を小さくする">A−</button>
+        <button class="btn" id="fontUp" aria-label="訳文の文字を大きくする">A＋</button>
+      </div>
       <label class="toggle"><input type="checkbox" id="showOrig"> 原文も表示</label>
-      <label class="btn">ファイルを開く<input type="file" id="pick" accept="application/pdf" hidden></label>
+      <button class="btn" data-pick>ファイルを開く</button>
+      <input type="file" id="pick" accept="application/pdf" hidden>
       <button class="btn primary" id="export" disabled>対訳 PDF を保存</button>
-      <span id="server" class="server">サーバー確認中…</span>
+      <span class="serverbox">
+        <span id="server" class="server" role="status">サーバー確認中…</span>
+        <button class="btn" id="startServer" hidden>起動</button>
+      </span>
     </div>
+    <div class="meter" id="meter" role="progressbar" aria-label="翻訳の進み具合" aria-valuemin="0" aria-valuemax="100" hidden><i></i></div>
   </header>
   <main id="pages">
     <section id="drop" class="drop">
-      <p>PDF をここにドロップするか、「ファイルを開く」から選んでね。</p>
-      <p class="hint">Web の PDF は、開いているタブで拡張機能のボタン（Alt+Shift+T）を押すとここで開くよ。</p>
+      <p>PDF をここにドロップするか、ファイルを選んでください。</p>
+      <button class="btn primary" data-pick>PDF を選ぶ</button>
+      <p class="hint">Web の PDF は、開いているタブで拡張機能のボタン（Alt+Shift+T）を押すとここで開きます。</p>
     </section>
   </main>
+  <div id="dropveil" aria-hidden="true">ここに PDF をドロップ</div>
   <script src="shared.js"></script>
   <script type="module" src="viewer.js"></script>
 </body>
