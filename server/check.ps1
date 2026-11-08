@@ -41,9 +41,14 @@ $py = if (Test-Path $bat) { if ((Get-Content $bat -Raw) -match '"([^"]+python[^"
 Report ([bool]($py -and (Test-Path $py))) "host.bat" $(if ($py) { $py } else { "missing: run host\install.ps1" })
 $manifest = Join-Path $root "host\com.plamo.translate_host.json"
 $anyReg = $false
-foreach ($b in "Google\Chrome", "Vivaldi", "Microsoft\Edge") {
-    $key = "HKCU:\Software\$b\NativeMessagingHosts\com.plamo.translate_host"
-    $val = if (Test-Path $key) { (Get-Item $key).GetValue("") } else { $null }
+foreach ($b in "Google\Chrome", "Chromium", "Vivaldi", "Microsoft\Edge") {
+    # Through WMI, like install.ps1: a shell inside a packaged (MSIX) app may see that app's private registry instead.
+    $tmp = [IO.Path]::GetTempFileName()
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c reg query `"HKCU\Software\$b\NativeMessagingHosts\com.plamo.translate_host`" /ve > `"$tmp`" 2>nul" }
+    Wait-Process -Id $r.ProcessId -ErrorAction SilentlyContinue
+    $val = $null
+    foreach ($line in Get-Content $tmp) { if ($line -match 'REG_SZ\s+(.+?)\s*$') { $val = $Matches[1] } }
+    Remove-Item $tmp -ErrorAction SilentlyContinue
     if ($val -and ($val -eq $manifest)) { "[OK] registry $b"; $anyReg = $true }
     elseif ($val) { "[--] registry $b - points to another checkout: $val (run host\install.ps1 here)" }
     else { "[--] registry $b - not registered" }

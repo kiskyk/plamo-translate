@@ -6,6 +6,10 @@
 
 > Preferred Networks の公式ツールではない。モデルの利用条件は各モデルのページ（PLaMo コミュニティライセンス）に従う。
 
+## エージェントに任せる
+
+Claude Code や Codex などのコーディングエージェントに、このリポジトリの URL を渡して「使えるようにして」と頼むだけで準備が進む。エージェントは [SETUP.md](SETUP.md) に従って進める。人の操作が要るのは、最後にブラウザへ読み込むところだけ。
+
 ## 動く環境
 
 - Windows 10 / 11（サーバーの起動・停止に PowerShell を使う）
@@ -17,7 +21,7 @@
 
 ## 準備
 
-細かい手順（llama.cpp の選び方・確かめ方・困ったとき）は [SETUP.md](SETUP.md)。コーディングエージェントに「SETUP.md のとおりに構築して」と頼んでもよい。揃ったかどうかは `server\check.ps1` で確かめられる（最後に `READY` と出れば使える）。
+細かい手順（llama.cpp の選び方・確かめ方・困ったとき）は [SETUP.md](SETUP.md)。揃ったかどうかは `server\check.ps1` で確かめられる（最後に `READY` と出れば使える）。
 
 1. モデルを落とす。Hugging Face の [0.8B](https://huggingface.co/pfnet/plamo-3-translate-0.8b-GGUF)・[2B](https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF)・[8B](https://huggingface.co/pfnet/plamo-3-translate-8b-GGUF)・[31B](https://huggingface.co/pfnet/plamo-3-translate-31b-GGUF) のうち使うものの `plamo-3-translate-<サイズ>-Q4_K_M.gguf` を1つのフォルダに置く。自動起動の既定は 2B
 2. サーバーの設定を書く。`server\config.example.json` を `server\config.json` に写して、`llamaServer`（llama-server.exe の場所）と `modelDir`（モデルのフォルダ）を書き換える。`logDir` を空にすると `server\logs\` にログが出る

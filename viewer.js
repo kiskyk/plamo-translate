@@ -493,6 +493,7 @@ async function loadPage(d, n, row) {
   const figRows = figureRows(blocks.filter((b) => b.kind === "figure"));
   for (const b of blocks) {
     if (b.kind === "figure" && !figRows.has(b)) continue; // drawn with the first figure of its row
+    if (b.front && /^[\d∗*†‡,\s]*$/.test(b.text)) continue; // affiliation marks left alone on a line
     const div = document.createElement("div");
     div.className = "para";
     tr.appendChild(div);

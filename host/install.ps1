@@ -12,17 +12,20 @@ if (-not $Python) {
 }
 if (-not $Python -or -not (Test-Path $Python)) { "Python 3 not found. Run again with -Python <path to python.exe>"; exit 1 }
 $bat = Join-Path $PSScriptRoot "host.bat"
-"@echo off`r`n`"$Python`" -I `"%~dp0host.py`" %*" | Set-Content -Encoding ascii $bat
+# cmd.exe reads batch files in the OEM code page; a Python path with non-ASCII characters breaks otherwise.
+$oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+[IO.File]::WriteAllText($bat, "@echo off`r`n`"$Python`" -I `"%~dp0host.py`" %*`r`n", $oem)
 "host.bat -> $Python"
 
 $manifest = Join-Path $PSScriptRoot "$name.json"
-@{
+$json = @{
     name            = $name
     description     = "Starts and stops the local PLaMo 3 Translate server"
     path            = $bat
     type            = "stdio"
     allowed_origins = @("chrome-extension://$ExtensionId/")
-} | ConvertTo-Json | Set-Content -Encoding ascii $manifest
+} | ConvertTo-Json
+[IO.File]::WriteAllText($manifest, $json, (New-Object Text.UTF8Encoding $false))
 foreach ($browser in "Google\Chrome", "Chromium", "Vivaldi", "Microsoft\Edge") {
     $key = "HKCU\Software\$browser\NativeMessagingHosts\$name"
     # Through WMI: from a shell inside a packaged (MSIX) app, a direct write goes to that app's private registry, which browsers cannot see.
