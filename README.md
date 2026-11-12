@@ -18,7 +18,18 @@
 
 Claude Code や Codex などのコーディングエージェントに、このリポジトリの URL を渡して「使えるようにして」と頼むだけで準備が進む。エージェントは [SETUP.md](SETUP.md) に従って進める。人の操作が要るのは、最後にブラウザへ読み込むところだけ。
 
-## 動く環境
+## ブラウザだけで使う（内蔵の 0.8B）
+
+llama-server や Python を入れずに、拡張機能を読み込むだけで使える。0.8B のモデルをブラウザの中（WebAssembly）で動かす。ノート PC 向け。
+
+1. 拡張機能をブラウザに読み込む（下の「準備」の手順 4 と同じ）
+2. 何かのページで翻訳ボタンを押す。初回だけモデル（約 0.57 GB）を Hugging Face から取得してブラウザに保存する。ボタンに進み具合（%）が出る。2 回目からはすぐ読み込まれる
+
+中継プログラムを登録していない PC では、設定の「翻訳エンジン」が既定（自動）のまま内蔵エンジンになる。サーバーも入れてある PC で内蔵エンジンを使うときは、設定で「ブラウザに内蔵の 0.8B」を選ぶ。エンジンの選択はブラウザの同期に乗らず、PC ごとに決まる。
+
+計算は既定で CPU を使う。Ryzen AI 5 340（内蔵 GPU は Radeon 840M）のノート PC で、長めの英文1文の翻訳が CPU で約 1.4 秒、WebGPU で約 3.9 秒だった（4 文を続けて訳すと CPU 3.9 秒、WebGPU の 4 本同時は 5.2 秒）。単体 GPU なら設定で WebGPU を試す価値がある。
+
+## 動く環境（llama-server を使うとき）
 
 | 項目 | 必要なもの |
 |---|---|
@@ -153,7 +164,10 @@ HTML の表に組み直す。セルはまとめて1回で訳し、直前の段�
 
 | ファイル | 役割 |
 |---|---|
-| `background.js` | サーバーへの依頼（同時4本・キャッシュ）、ボタンと右クリックメニュー |
+| `background.js` | 翻訳の依頼（サーバーは同時4本・キャッシュ、内蔵エンジンは `engine.html` へ）、ボタンと右クリックメニュー |
+| `engine.html` / `engine.js` | 内蔵エンジン。offscreen document で wllama を動かし、0.8B のモデルを OPFS に保存する。PFML3 のプロンプトを自前で組む |
+| `vendor/wllama` | wllama（llama.cpp の WebAssembly + WebGPU 版）のビルド済みファイル。作り直しは `node tools/wllama/build.mjs`（Docker が要る。手順とパッチは [Sakutto](https://github.com/jammaru/sakutto) に倣った。`tools/wllama/NOTICE`） |
+| `tools/serve.mjs` | 内蔵エンジンを拡張機能なしで試すための http サーバー（wasm のスレッドに要るヘッダーを付ける） |
 | `shared.js` | 訳す文の判定と翻訳の依頼（ページとビューアで共用） |
 | `content.js` / `content.css` | Web ページの翻訳（置き換え・併記） |
 | `mathml.js` | PDF の文字の配置から数式を MathML に組み直す |
@@ -187,6 +201,8 @@ python -m http.server 8765 --bind 127.0.0.1
 | `http://127.0.0.1:8765/test/analyze.html?files=papers/1810.04805.pdf` | 全ページの分け方（段落・式・表・図）と怪しい箇所の一覧 |
 | `http://127.0.0.1:8765/test/math.html?files=papers/2006.11239.pdf&kind=eq` | 元の式の画像と組み直した MathML の並べ比べ（`only=fail` で画像に戻した式の理由だけ） |
 
+内蔵エンジンは `node tools/serve.mjs` で開き、`http://127.0.0.1:8765/test/engine.html` で4文を訳して時間を測れる（`?device=webgpu` で WebGPU）。このページはブラウザの保存領域が足りないとモデルをメモリに置くので、開くたびに取得し直す。
+
 </details>
 
 ## 制限
@@ -209,4 +225,4 @@ PDF ビューアは文字を取り出して段落に組み直すので、次の�
 
 ## ライセンス
 
-MIT（`LICENSE`）。`vendor/pdfjs` は pdf.js（Apache License 2.0）。
+MIT（`LICENSE`）。`vendor/pdfjs` は pdf.js（Apache License 2.0）。`vendor/wllama` は wllama・llama.cpp・Emscripten のランタイム（MIT）と Dawn（BSD-3-Clause）。`tools/wllama/` のビルド手順とパッチは Sakutto（MIT）から（`tools/wllama/NOTICE`）。

@@ -1,0 +1,71 @@
+{
+  "wllama": {
+    "repository": "https://github.com/ngxson/wllama.git",
+    "commit": "d275dac17bc7f190161deb24fd834ce03342e2bc"
+  },
+  "llamaCpp": {
+    "commit": "5aeac37a35b44fde4bdffaec9159f2fcb253b622"
+  },
+  "emscripten": "emscripten/emsdk:4.0.20",
+  "features": [
+    "webgpu",
+    "jspi",
+    "memory64"
+  ],
+  "patches": [
+    {
+      "file": "0001-static-worker-script.patch",
+      "sha256": "6f2c3ba185a1cefc0473699bf19a618542f95a514d4838d66bb91cb7527769d4"
+    },
+    {
+      "file": "0002-packaged-asset-paths.patch",
+      "sha256": "40f655f321f83a37dd22505c11a1454c0aedc78e2af4e36d97533e2c0ff6edd4"
+    },
+    {
+      "file": "0003-wasm-simd-cpu-kernels.patch",
+      "sha256": "2282e0c7609c6083622c2c75eca79ea900151e323b23b94c50fa2a9ac90de4ac"
+    },
+    {
+      "file": "0004-webgpu-reuse-bind-groups.patch",
+      "sha256": "6a444cf27f17da394a55e93c88d875243d673890e3b463486d561b84ff463468"
+    },
+    {
+      "file": "0005-disable-prompt-cache.patch",
+      "sha256": "6bfef7feafe65498f11d51268eb5b11c147adc7b989fc0afa1a33cb056d1b4d1"
+    },
+    {
+      "file": "0006-retry-dawn-download.patch",
+      "sha256": "b57213c62ddf0890e3bc32f1a99f68720fdc0961b4436a39ee27f8cf7d48980e"
+    },
+    {
+      "file": "0007-webgpu-adapter-device-retry.patch",
+      "sha256": "8049de214d30ea37cd9a6572677e7aed6ef1abc2100b9ceef8a925a52cc2d565"
+    },
+    {
+      "file": "0008-webgpu-debug-profile.patch",
+      "sha256": "e5251b3945620cba727152eb1fb2b881134a5ff674943e3447a825f6ed1a0f2e"
+    }
+  ],
+  "files": {
+    "wllama-module.js": {
+      "bytes": 140727,
+      "sha256": "fa13de910023b96ea95eb39f8da7cbbe31ac709728e16b267e7fddf1b5fea59b"
+    },
+    "wllama-pthread.js": {
+      "bytes": 140681,
+      "sha256": "a07c567e0b1a49278c1526a8734b20674e3c581f8357df7bed0712bae4777a9e"
+    },
+    "wllama-worker.js": {
+      "bytes": 16396,
+      "sha256": "33bc84a02b3654ad1257929f9076cf2322a72e632ecccd640f51d845f91f24ad"
+    },
+    "wllama.js": {
+      "bytes": 230712,
+      "sha256": "8437e8d6d9e8ce75fbe9bbd1cde69a18d146d1c709618de66019cb534a99eb49"
+    },
+    "wllama.wasm": {
+      "bytes": 9244012,
+      "sha256": "31e8d1c311805ee11c65f151617c579f940ef3ae2ad7da9b4c9dc3c61fb6d911"
+    }
+  }
+}

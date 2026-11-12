@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>内蔵エンジンの試験</title>
+<style>
+  body { font: 14px/1.6 "BIZ UDPGothic", "Yu Gothic UI", sans-serif; margin: 16px; max-width: 900px; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border: 1px solid #aaa; padding: 4px 6px; vertical-align: top; }
+  #state { font-weight: 700; }
+</style>
+<!-- Serve with `node tools/serve.mjs`, then open http://127.0.0.1:8765/test/engine.html -->
+<p>状態: <span id="state">-</span> / crossOriginIsolated: <span id="coi"></span> / WebGPU: <span id="gpu"></span></p>
+<p><button id="run">読み込んで訳す</button> <button id="par">4本同時に訳す</button></p>
+<table id="out"><tr><th>原文</th><th>訳</th><th>秒</th></tr></table>
+<pre id="log"></pre>
+<script type="module">
+  import "../engine.js";
+  const E = globalThis.PlamoEngine;
+  const DEV = new URLSearchParams(location.search).get("device") || "cpu"; // ?device=webgpu to compare
+  const $ = (id) => document.getElementById(id);
+  $("coi").textContent = String(globalThis.crossOriginIsolated);
+  $("gpu").textContent = String(!!navigator.gpu);
+  addEventListener("engine-state", (e) => {
+    const s = e.detail;
+    $("state").textContent = `${s.phase} ${s.phase === "downloading" ? s.pct + "%" : ""} ${s.backend || ""} ${s.detail || ""}`;
+  });
+  const SENTENCES = [
+    ["The weather is nice today.", "ja"],
+    ["Large language models have shown remarkable capabilities in a wide range of natural language processing tasks, including translation, summarization, and question answering.", "ja"],
+    ["We propose a simple yet effective method that reduces the memory footprint of attention by a factor of four without degrading accuracy.", "ja"],
+    ["今日は雨が降りそうなので、傘を持って出かけたほうがいいと思います。", "en"],
+  ];
+  const results = (globalThis.results = []);
+  function row(src, text, sec) {
+    const tr = $("out").insertRow();
+    for (const v of [src, text, sec.toFixed(2)]) tr.insertCell().textContent = v;
+    results.push({ src, text, sec });
+  }
+  $("run").onclick = async () => {
+    const t0 = performance.now();
+    await E.load(DEV);
+    $("log").textContent += `load ${((performance.now() - t0) / 1000).toFixed(1)} s\n`;
+    for (const [s, tgt] of SENTENCES) {
+      const t = performance.now();
+      row(s, await E.translate(s, tgt, undefined, DEV), (performance.now() - t) / 1000);
+    }
+    globalThis.done = true;
+  };
+  $("par").onclick = async () => {
+    await E.load(DEV);
+    const t = performance.now();
+    const outs = await Promise.all(SENTENCES.map(([s, tgt]) => E.translate(s, tgt, undefined, DEV)));
+    const sec = (performance.now() - t) / 1000;
+    outs.forEach((o, i) => row(SENTENCES[i][0], o, sec));
+    $("log").textContent += `parallel 4: ${sec.toFixed(2)} s\n`;
+    globalThis.parDone = true;
+  };
+</script>
+</html>

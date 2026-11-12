@@ -1,0 +1,311 @@
+Reuse ggml-webgpu bind groups and upload kernel parameters once per batch.
+
+Every decode step encodes the same few hundred dispatches over the same buffers, yet the
+backend created a new bind group and issued a separate WriteBuffer for each dispatch. In a
+browser each of those is serialized to the GPU process, so the per-token cost was mostly
+command encoding rather than GPU work. Bind groups are now cached by pipeline and entries
+(cleared when a buffer is freed), and the parameter arena is uploaded in one WriteBuffer
+before each submit.
+
+A matrix product with more than four rows used the tiled matrix shader, which took 87% of
+the GPU time of a batched decode. It now runs through the vector shader in batches of four
+columns, which share each read of the weights.
+
+The backend's synchronize waited for the queue just before every tensor read, and that read
+waits for the same work. The extra round trip took most of a decode step, so it is gone.
+
+diff --git a/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp b/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
+index 6efff9b..a158519 100644
+--- a/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
++++ b/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu-shader-lib.hpp
+@@ -1191,7 +1191,7 @@ inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
+                                      const ggml_tensor * src1,
+                                      bool                supports_dot_product,
+                                      const std::string & vendor) {
+-    if (src1->ne[1] <= 4) {
++    if (src1->ne[1] <= 4 || (src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1)) {
+         bool supports_dp4a = vendor == "amd" || vendor == "intel" || vendor == "nvidia";
+         if (supports_dp4a && supports_dot_product) {
+             switch (src1->type) {
+diff --git a/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu.cpp b/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+index 15e6c78..6f57a95 100644
+--- a/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu.cpp
++++ b/llama.cpp/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include <webgpu/webgpu_cpp.h>
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <cstdint>
+ #include <cstring>
+@@ -29,6 +30,7 @@
+ #include <mutex>
+ #include <optional>
+ #include <string>
++#include <unordered_map>
+ #include <utility>
+ #include <vector>
+ 
+@@ -123,12 +125,18 @@ struct webgpu_param_arena {
+     size_t       slot_size   = 0;
+     uint32_t     slot_count  = 0;
+     uint32_t     next_slot   = 0;
++    // Parameters are staged here and uploaded with one WriteBuffer before the batch is
++    // submitted, instead of one WriteBuffer per dispatch.
++    std::vector<uint8_t> staged;
++    size_t               staged_end = 0;
+ 
+     void init(wgpu::Device device, size_t slot_size, uint32_t slot_count, size_t alignment) {
+         this->slot_stride = ROUNDUP_POW2(slot_size, alignment);
+         this->slot_size   = slot_size;
+         this->slot_count  = slot_count;
+         this->next_slot   = 0;
++        this->staged.assign(this->slot_stride * slot_count, 0);
++        this->staged_end = 0;
+ 
+         ggml_webgpu_create_buffer(device, buffer, this->slot_stride * slot_count,
+                                   wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform, "ggml_webgpu_param_arena");
+@@ -143,6 +151,19 @@ struct webgpu_param_arena {
+         return slot_stride * next_slot++;
+     }
+ 
++    void stage(size_t offset, const void * data, size_t size) {
++        memcpy(staged.data() + offset, data, size);
++        staged_end = std::max(staged_end, offset + size);
++    }
++
++    void flush(wgpu::Queue & queue) {
++        if (staged_end == 0) {
++            return;
++        }
++        queue.WriteBuffer(buffer, 0, staged.data(), ROUNDUP_POW2(staged_end, 4));
++        staged_end = 0;
++    }
++
+     void reset() { next_slot = 0; }
+ 
+     void cleanup() {
+@@ -203,6 +224,11 @@ struct webgpu_global_context_struct {
+     wgpu::Buffer    memset_params_buf;
+     webgpu_pipeline memset_pipeline;
+ 
++    // Bind groups by pipeline and entries. Each decode step encodes the same dispatches over
++    // the same buffers, so a bind group made for one token serves the next. Cleared whenever
++    // a buffer is freed, since a later buffer can reuse the freed handle's address.
++    std::unordered_map<std::string, wgpu::BindGroup> bind_group_cache;
++
+     std::string vendor;
+ 
+     // TODO: We should rework the CPU profiling time handling to make it more useful. ref: https://github.com/ggml-org/llama.cpp/pull/22050
+@@ -561,6 +587,7 @@ static void ggml_backend_webgpu_submit_commands(webgpu_context &          ctx,
+         num_inflight_batches = 0;
+     }
+ 
++    ctx->param_arena.flush(ctx->global_ctx->queue);
+     ctx->global_ctx->queue.Submit(1, &commands);
+     num_inflight_batches++;
+ }
+@@ -585,7 +612,6 @@ static webgpu_encoded_op ggml_backend_webgpu_build_multi(webgpu_context &
+                                                          const std::vector<webgpu_dispatch_desc> & dispatches) {
+     webgpu_encoded_op            result = {};
+     std::vector<wgpu::BindGroup> bind_groups;
+-    std::vector<size_t>          param_offsets;
+     result.num_kernels = dispatches.size();
+ 
+     for (size_t i = 0; i < dispatches.size(); i++) {
+@@ -598,18 +624,35 @@ static webgpu_encoded_op ggml_backend_webgpu_build_multi(webgpu_context &
+         entries.push_back(ggml_webgpu_make_bind_group_entry(params_binding_num, ctx->param_arena.buffer, param_offset,
+                                                             ctx->param_arena.slot_size));
+ 
+-        wgpu::BindGroupDescriptor bind_group_desc;
+-        bind_group_desc.layout     = dispatch.pipeline.pipeline.GetBindGroupLayout(0);
+-        bind_group_desc.entryCount = entries.size();
+-        bind_group_desc.entries    = entries.data();
+-        bind_group_desc.label      = dispatch.pipeline.name.c_str();
+-        bind_groups.push_back(ctx->global_ctx->device.CreateBindGroup(&bind_group_desc));
+-        param_offsets.push_back(param_offset);
+-    }
++        std::string key;
++        key.reserve(sizeof(void *) + entries.size() * (sizeof(uint32_t) + sizeof(void *) + 2 * sizeof(uint64_t)));
++        const WGPUComputePipeline pipeline_handle = dispatch.pipeline.pipeline.Get();
++        key.append(reinterpret_cast<const char *>(&pipeline_handle), sizeof(pipeline_handle));
++        for (const wgpu::BindGroupEntry & entry : entries) {
++            const WGPUBuffer buffer_handle = entry.buffer.Get();
++            const uint64_t   offset        = entry.offset;
++            const uint64_t   size          = entry.size;
++            key.append(reinterpret_cast<const char *>(&entry.binding), sizeof(entry.binding));
++            key.append(reinterpret_cast<const char *>(&buffer_handle), sizeof(buffer_handle));
++            key.append(reinterpret_cast<const char *>(&offset), sizeof(offset));
++            key.append(reinterpret_cast<const char *>(&size), sizeof(size));
++        }
+ 
+-    for (size_t i = 0; i < param_offsets.size(); i++) {
+-        ctx->global_ctx->queue.WriteBuffer(ctx->param_arena.buffer, param_offsets[i], dispatches[i].params.data(),
+-                                           dispatches[i].params.size() * sizeof(uint32_t));
++        auto & cache  = ctx->global_ctx->bind_group_cache;
++        auto   cached = cache.find(key);
++        if (cached == cache.end()) {
++            if (cache.size() >= 16384) {
++                cache.clear();
++            }
++            wgpu::BindGroupDescriptor bind_group_desc;
++            bind_group_desc.layout     = dispatch.pipeline.pipeline.GetBindGroupLayout(0);
++            bind_group_desc.entryCount = entries.size();
++            bind_group_desc.entries    = entries.data();
++            bind_group_desc.label      = dispatch.pipeline.name.c_str();
++            cached = cache.emplace(std::move(key), ctx->global_ctx->device.CreateBindGroup(&bind_group_desc)).first;
++        }
++        bind_groups.push_back(cached->second);
++        ctx->param_arena.stage(param_offset, dispatch.params.data(), param_size);
+     }
+ 
+ #ifdef GGML_WEBGPU_GPU_PROFILE
+@@ -757,6 +800,7 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
+     std::cout << "ggml_webgpu: gpu/cpu ratio: " << (total_cpu > 0.0 ? total_gpu / total_cpu : 0.0) << "\n";
+ #endif
+ 
++    ctx->webgpu_ctx->global_ctx->bind_group_cache.clear();
+     delete ctx;
+     delete backend;
+ }
+@@ -1627,10 +1671,97 @@ static void ggml_webgpu_quantize_q8_dispatch(webgpu_context &
+     });
+ }
+ 
++// Encodes `columns`-wide batches of an MMVQ product, starting at column `first_column`. The
++// quantized input of every column is already in the q8 scratch that dispatches[0] wrote.
++static void ggml_webgpu_append_mmvq_columns(webgpu_context &                    ctx,
++                                            ggml_tensor *                       src0,
++                                            ggml_tensor *                       src1,
++                                            ggml_tensor *                       dst,
++                                            uint32_t                            columns,
++                                            uint32_t                            batches,
++                                            uint32_t                            first_column,
++                                            std::vector<webgpu_dispatch_desc> & dispatches) {
++    ggml_tensor src1_view = *src1;
++    src1_view.ne[1]       = columns;
++    src1_view.ne[2]       = batches;
++    ggml_tensor dst_view  = *dst;
++    dst_view.ne[1]        = columns;
++    dst_view.ne[2]        = batches;
++
++    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
++    shader_lib_ctx.src0                           = src0;
++    shader_lib_ctx.src1                           = &src1_view;
++    shader_lib_ctx.dst                            = &dst_view;
++    shader_lib_ctx.max_wg_size                    = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
++    shader_lib_ctx.supports_subgroups             = ctx->global_ctx->capabilities.supports_subgroups;
++    shader_lib_ctx.supports_subgroup_matrix       = ctx->global_ctx->capabilities.supports_subgroup_matrix;
++    shader_lib_ctx.sg_mat_m                       = ctx->global_ctx->capabilities.sg_mat_m;
++    shader_lib_ctx.sg_mat_n                       = ctx->global_ctx->capabilities.sg_mat_n;
++    shader_lib_ctx.sg_mat_k                       = ctx->global_ctx->capabilities.sg_mat_k;
++    shader_lib_ctx.min_subgroup_size              = ctx->global_ctx->capabilities.min_subgroup_size;
++    shader_lib_ctx.max_subgroup_size              = ctx->global_ctx->capabilities.max_subgroup_size;
++    shader_lib_ctx.supports_dot_product           = ctx->global_ctx->capabilities.supports_dot_product;
++    shader_lib_ctx.vendor                         = ctx->global_ctx->vendor;
++
++    webgpu_pipeline pipeline  = ctx->shader_lib->get_mul_mat_vec_pipeline(shader_lib_ctx, false);
++    auto *          decisions = static_cast<ggml_webgpu_mul_mat_vec_shader_decisions *>(pipeline.context.get());
++
++    const uint32_t        m      = (uint32_t) dst->ne[0];
++    std::vector<uint32_t> params = {
++        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
++        first_column * (uint32_t) (src0->ne[0] / 32),
++        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)) + first_column * m,
++        m,
++        columns,
++        (uint32_t) src0->ne[0],
++        (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),
++        (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)),
++        (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),
++        columns * (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)),
++        (uint32_t) (src0->nb[3] / ggml_type_size(src0->type)),
++        (uint32_t) (src1->nb[3] / ggml_type_size(src1->type)),
++        1,
++        1,
++        batches,
++        1,
++    };
++
++    const auto &                      q8_entry = dispatches[0].bind_group_entries[1];
++    std::vector<wgpu::BindGroupEntry> entries  = {
++        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
++        ggml_webgpu_make_bind_group_entry(1, ggml_webgpu_tensor_buf(dst), q8_entry.offset, q8_entry.size),
++        ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, dst),
++    };
++
++    uint32_t wg_x = 1;
++    uint32_t wg_y = 1;
++    compute_2d_workgroups(CEIL_DIV(m, decisions->outputs_per_wg) * batches,
++                          ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
++    dispatches.push_back({
++        pipeline, std::move(params), std::move(entries), { wg_x, wg_y }
++    });
++}
++
+ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
+                                              ggml_tensor *    src0,
+                                              ggml_tensor *    src1,
+                                              ggml_tensor *    dst) {
++    // The vector shader takes up to four columns and also loops over batches. A wider output
++    // runs through it as batches of four columns and one batch for the rest, not through the
++    // much slower tiled matrix shader. The columns of a batch share one read of the weights.
++    if (dst->ne[1] > 4 && ggml_webgpu_can_use_mmvq(src0, src1, ctx->global_ctx->capabilities.supports_dot_product,
++                                                   ctx->global_ctx->vendor)) {
++        std::vector<webgpu_dispatch_desc> dispatches;
++        ggml_webgpu_quantize_q8_dispatch(ctx, src0, src1, dst, dispatches);
++        const uint32_t batches = (uint32_t) dst->ne[1] / 4;
++        const uint32_t rest    = (uint32_t) dst->ne[1] % 4;
++        ggml_webgpu_append_mmvq_columns(ctx, src0, src1, dst, 4, batches, 0, dispatches);
++        if (rest > 0) {
++            ggml_webgpu_append_mmvq_columns(ctx, src0, src1, dst, rest, 1, batches * 4, dispatches);
++        }
++        return ggml_backend_webgpu_build_multi(ctx, dispatches);
++    }
++
+     // Determine if this is a mat-vec operation
+     bool use_mat_vec = (dst->ne[1] <= 4);
+ 
+@@ -1669,7 +1800,7 @@ static webgpu_encoded_op ggml_webgpu_mul_mat(webgpu_context & ctx,
+     }
+ 
+     uint32_t offset_src0   = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type));
+-    uint32_t offset_src1   = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type));
++    uint32_t offset_src1   = use_mmvq ? 0 : (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type));
+     size_t   merged_offset = 0;
+     size_t   merged_size   = 0;
+     if (src_overlap) {
+@@ -3731,8 +3862,9 @@ static void ggml_backend_webgpu_set_tensor_async(ggml_backend_t backend,
+ }
+ 
+ static void ggml_backend_webgpu_synchronize(ggml_backend_t backend) {
+-    ggml_backend_webgpu_context * backend_ctx = (ggml_backend_webgpu_context *) backend->context;
+-    ggml_backend_webgpu_wait_queue(backend_ctx->webgpu_ctx->global_ctx);
++    // Every read of a tensor maps a staging buffer behind the submitted work, so that read
++    // already waits for it. A queue wait here would only add one more round trip per step.
++    GGML_UNUSED(backend);
+ }
+ 
+ static ggml_backend_i ggml_backend_webgpu_i = {
+@@ -3761,6 +3893,7 @@ static ggml_backend_i ggml_backend_webgpu_i = {
+ static void ggml_backend_webgpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+     ggml_backend_webgpu_buffer_context * ctx = static_cast<ggml_backend_webgpu_buffer_context *>(buffer->context);
+     if (ctx != nullptr && ctx->buffer != nullptr) {
++        ctx->global_ctx->bind_group_cache.clear();
+         ctx->buffer.Destroy();
+         delete ctx;
+     }
+diff --git a/llama.cpp/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_vec.wgsl b/llama.cpp/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_vec.wgsl
+index 1781a6c..de084c2 100644
+--- a/llama.cpp/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_vec.wgsl
++++ b/llama.cpp/ggml/src/ggml-webgpu/wgsl-shaders/mul_mat_vec.wgsl
+@@ -101,7 +101,7 @@ fn main(
+     let dst_idx_base = params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row_base;
+ 
+ #ifdef MMVQ
+-    let src1q_idx_base = (src13_idx * params.bs02 * params.broadcast2 + src12_idx) * params.n * (params.k / 32u);
++    let src1q_idx_base = params.offset_src1 + (src13_idx * params.bs02 * params.broadcast2 + src12_idx) * params.n * (params.k / 32u);
+     let acc = accumulate_vec_q_dot(thread_id, row_base, src0_batch_offset, src1q_idx_base);
+ #else
+     let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;

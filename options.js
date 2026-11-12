@@ -21,6 +21,10 @@ async function testServer() {
   const status = $("status");
   status.className = "";
   status.textContent = "確認しています…";
+  if ((await chrome.runtime.sendMessage({ type: "engine-info" }))?.kind === "builtin") {
+    status.textContent = "内蔵エンジンを使うので、サーバーは使いません";
+    return;
+  }
   const r = await chrome.runtime.sendMessage({ type: "health" });
   status.className = r?.ok ? "ok" : "ng";
   status.textContent = r?.ok
@@ -49,3 +53,31 @@ for (const k of ids) {
   });
 }
 $("test").addEventListener("click", testServer);
+
+// The engine choice lives in storage.local so each PC keeps its own.
+const PHASE = { idle: "読み込んでいません（最初の翻訳で読み込みます）", downloading: "モデルを取得中", loading: "読み込み中", ready: "準備完了", error: "読み込めません" };
+async function showEngine() {
+  const r = await chrome.runtime.sendMessage({ type: "engine-info" });
+  const st = r?.state || {};
+  $("engineHelp").textContent = r?.kind === "builtin"
+    ? "内蔵エンジン: " + (PHASE[st.phase] || st.phase || "") + (st.phase === "downloading" ? ` ${st.pct}%` : "") +
+      (st.backend ? `（${st.backend}）` : "") + (st.detail ? " — " + st.detail : "")
+    : "llama-server を使います。";
+}
+chrome.storage.local.get({ engine: "auto", device: "cpu" }).then(({ engine, device }) => {
+  $("engine").value = engine;
+  $("device").value = device;
+  showEngine();
+});
+// Takes effect on the next translation (the engine reloads on the other device).
+$("device").addEventListener("change", async () => {
+  await chrome.storage.local.set({ device: $("device").value });
+  showSaved();
+});
+$("engine").addEventListener("change", async () => {
+  await chrome.storage.local.set({ engine: $("engine").value });
+  showSaved();
+  showEngine();
+  testServer();
+});
+chrome.runtime.onMessage.addListener((msg) => { if (msg?.type === "engine-state") showEngine(); });

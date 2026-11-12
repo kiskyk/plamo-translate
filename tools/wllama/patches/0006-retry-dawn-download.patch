@@ -1,0 +1,42 @@
+Retry the Dawn package download and fail loudly when it is not a zip.
+
+GitHub serves release assets from a separate host, and a shared CI runner can get a short
+error body instead of the archive. `curl -L` treats that as success, so the build only
+failed later, at `zipfile.ZipFile`, with "File is not a zip file" and no trace of what
+came back. The download now retries, and checks the bytes are a zip before extracting.
+
+diff --git a/scripts/docker-compose.yml b/scripts/docker-compose.yml
+index 336447d..fcae0b2 100644
+--- a/scripts/docker-compose.yml
++++ b/scripts/docker-compose.yml
+@@ -30,8 +30,28 @@ services:
+         EMDAWN_PKG="emdawnwebgpu_pkg-$${DAWN_TAG}.zip"
+         EMDAWNWEBGPU_DIR="/source/build/emdawn/emdawnwebgpu_pkg"
+         echo "Downloading $${EMDAWN_PKG}"
+-        curl -L -o emdawn.zip \
+-          "https://github.com/google/dawn/releases/download/$${DAWN_TAG}/$${EMDAWN_PKG}"
++        # The asset comes from a redirect to release-assets.githubusercontent.com, and a
++        # rate-limited or busy host answers with a few bytes of text instead of the zip.
++        # Retry, then insist on a zip: the failure used to surface much later, from python,
++        # with nothing about the response that actually came back.
++        downloaded=''
++        for attempt in 1 2 3 4 5; do
++          rm -f emdawn.zip
++          if curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 300 \
++               -o emdawn.zip \
++               "https://github.com/google/dawn/releases/download/$${DAWN_TAG}/$${EMDAWN_PKG}" &&
++             [ "$$(head -c 2 emdawn.zip)" = "PK" ]; then
++            downloaded=yes
++            break
++          fi
++          echo "attempt $${attempt} did not get a zip, retrying" >&2
++          sleep $$((attempt * 5))
++        done
++        if [ -z "$${downloaded}" ]; then
++          echo "could not download $${EMDAWN_PKG} as a zip; last bytes:" >&2
++          head -c 200 emdawn.zip >&2 || true
++          exit 1
++        fi
+         python3 -c "import zipfile; zf=zipfile.ZipFile('emdawn.zip','r'); zf.extractall('/source/build/emdawn'); zf.close()"
+ 
+         CMAKE_EXTRA_FLAGS="-DWLLAMA_TEST_BACKEND=OFF"

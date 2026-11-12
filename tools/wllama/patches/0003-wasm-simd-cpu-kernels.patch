@@ -1,0 +1,28 @@
+Build ggml's wasm SIMD CPU kernels.
+
+Emscripten's CMake toolchain reports CMAKE_SYSTEM_PROCESSOR=x86, which ggml-cpu does not
+recognise as wasm, so it falls back to GGML_CPU_GENERIC and never compiles
+ggml-cpu/arch/wasm/quants.c. Setting the processor to wasm32 selects those kernels.
+
+diff --git a/scripts/docker-compose.yml b/scripts/docker-compose.yml
+index ac0208d..336447d 100644
+--- a/scripts/docker-compose.yml
++++ b/scripts/docker-compose.yml
+@@ -39,7 +39,7 @@ services:
+           CMAKE_EXTRA_FLAGS="-DWLLAMA_TEST_BACKEND=ON";
+         fi
+ 
+-        emcmake cmake .. -DGGML_WEBGPU=ON -DGGML_WEBGPU_JSPI=ON -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" $${CMAKE_EXTRA_FLAGS}
++        emcmake cmake .. -DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32 -DGGML_WEBGPU=ON -DGGML_WEBGPU_JSPI=ON -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" $${CMAKE_EXTRA_FLAGS}
+         emmake make wllama -j$$(nproc)
+ 
+         # go back to root
+@@ -54,7 +54,7 @@ services:
+         if [ -z "${SKIP_COMPAT}" ]; then
+           mkdir -p build-compat
+           cd build-compat
+-          emcmake cmake .. -DWLLAMA_COMPAT=ON -DLLAMA_WASM_MEM64=OFF -DGGML_WEBGPU=ON -DGGML_WEBGPU_JSPI=OFF -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" $${CMAKE_EXTRA_FLAGS}
++          emcmake cmake .. -DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32 -DWLLAMA_COMPAT=ON -DLLAMA_WASM_MEM64=OFF -DGGML_WEBGPU=ON -DGGML_WEBGPU_JSPI=OFF -DEMDAWNWEBGPU_DIR="$${EMDAWNWEBGPU_DIR}" $${CMAKE_EXTRA_FLAGS}
+           emmake make wllama -j$$(nproc)
+ 
+           # go back to root

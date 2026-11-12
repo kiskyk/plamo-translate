@@ -42,6 +42,23 @@
 </head>
 <body>
   <div class="field">
+    <label for="engine">翻訳エンジン（この PC だけの設定）</label>
+    <select id="engine" aria-describedby="engineHelp">
+      <option value="auto">自動（サーバーか中継プログラムがあればサーバー、なければ内蔵）</option>
+      <option value="builtin">ブラウザに内蔵の 0.8B（準備不要・初回にモデル約 0.57 GB を取得）</option>
+      <option value="server">llama-server（下の翻訳サーバー）</option>
+    </select>
+    <p class="help" id="engineHelp"></p>
+  </div>
+  <div class="field">
+    <label for="device">内蔵エンジンの計算に使うもの（この PC だけの設定）</label>
+    <select id="device" aria-describedby="deviceHelp">
+      <option value="cpu">CPU</option>
+      <option value="webgpu">GPU（WebGPU。使えなければ CPU）</option>
+    </select>
+    <p class="help" id="deviceHelp">内蔵 GPU のノート PC では CPU のほうが速いことが多い。単体 GPU なら WebGPU を試す価値がある。</p>
+  </div>
+  <div class="field">
     <label for="server">翻訳サーバー</label>
     <div class="serverline">
       <input id="server" type="text" spellcheck="false" placeholder="http://127.0.0.1:11437" aria-describedby="status">

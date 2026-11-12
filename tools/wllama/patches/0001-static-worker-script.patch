@@ -1,0 +1,163 @@
+diff --git a/src/utils.ts b/src/utils.ts
+index fe45ec4..526c626 100644
+--- a/src/utils.ts
++++ b/src/utils.ts
+@@ -338,16 +338,25 @@ export const isSafariMobile = (): boolean => {
+   return !!navigator.userAgent.match(/Version\/([0-9\._]+).*Mobile.*Safari.*/); // ios
+ };
+ 
++export interface WorkerRunOptions {
++  pathConfig: { [filename: string]: string };
++  nbThread: number;
++  compat: boolean;
++  noWebGPU?: boolean;
++  moduleUrl: string;
++}
++
+ /**
+- * Create a worker from a string
++ * Create the inference worker from a packaged script.
++ * Run options travel in the query string, so the script stays static.
+  */
+-export const createWorker = (workerCode: string | Blob): Worker => {
+-  const workerURL = URL.createObjectURL(
+-    isString(workerCode)
+-      ? new Blob([workerCode], { type: 'text/javascript' })
+-      : (workerCode as Blob)
+-  );
+-  return new Worker(workerURL, { type: 'module' });
++export const createWorker = (
++  workerUrl: string,
++  runOptions: WorkerRunOptions
++): Worker => {
++  const url = new URL(workerUrl);
++  url.searchParams.set('options', JSON.stringify(runOptions));
++  return new Worker(url.href);
+ };
+ 
+ /**
+diff --git a/src/worker.ts b/src/worker.ts
+index 3cdc7c9..43d1739 100644
+--- a/src/worker.ts
++++ b/src/worker.ts
+@@ -18,12 +18,7 @@ import {
+   canUseAsyncFileRead,
+   createWorker,
+   isSafariMobile,
+-  isString,
+ } from './utils';
+-import {
+-  LLAMA_CPP_WORKER_CODE,
+-  WLLAMA_EMSCRIPTEN_CODE,
+-} from './workers-code/generated';
+ import { WllamaRuntimeError } from './wllama';
+ 
+ interface Logger {
+@@ -56,31 +51,17 @@ interface Task {
+   buffers?: ArrayBuffer[] | undefined;
+ }
+ 
+-const JSPI_STUB = `
+-if (!WebAssembly.Suspending) {
+-  // JSPI not available - stubs that keep the import/export tables valid.
+-  // Suspending wraps imports: identity is fine since async imports won't be called.
+-  WebAssembly.Suspending = function (fn) {
+-    // console.log(fn.toString());
+-    return fn;
+-  };
+-  // promising wraps exports: must return a Promise so ccall's ret.then() works.
+-  WebAssembly.promising = function (fn) {
+-    return function (...args) {
+-      try {
+-        return Promise.resolve(fn(...args));
+-      } catch (e) {
+-        return Promise.reject(e);
+-      }
+-    };
+-  };
+-}
+-`;
+-
+ export interface WllamaWorkerResources {
+   wasmPath: string;
+-  // if jsPath is not provided, use WLLAMA_EMSCRIPTEN_CODE
+-  jsPath?: string | { code: string } | undefined;
++  // packaged worker entry script
++  workerUrl: string;
++  // packaged emscripten module script, loaded by the worker
++  moduleUrl: string;
++  // packaged pthread entry script, spawned by the module
++  pthreadUrl: string;
++  // compat variants, used when the runtime lacks JSPI or memory64
++  compatModuleUrl: string;
++  compatPthreadUrl: string;
+   // in compat mode, mem64 must be disabled
+   compat: boolean;
+   // skip WebGPU device initialization entirely (e.g. when n_gpu_layers is 0)
+@@ -115,58 +96,27 @@ export class ProxyToWorker {
+     this.useAsyncFile = canUseAsyncFileRead(resources.compat);
+   }
+ 
+-  async getModuleCode(): Promise<string> {
+-    if (!this.resources.jsPath) {
+-      if (this.resources.compat) {
+-        throw new Error(
+-          'compat mode is enabled but no jsPath was provided. Pass a worker JS via setCompat() or install @wllama/wllama-compat.'
+-        );
+-      }
+-      return WLLAMA_EMSCRIPTEN_CODE;
+-    } else if ((this.resources.jsPath as { code: string }).code) {
+-      return (this.resources.jsPath as { code: string }).code;
+-    } else if (isString(this.resources.jsPath)) {
+-      const response = await fetch(this.resources.jsPath as string);
+-      if (!response.ok) {
+-        throw new Error(
+-          `Failed to fetch worker code from ${this.resources.jsPath}`
+-        );
+-      }
+-      return await response.text();
+-    } else {
+-      throw new Error('No JS code provided for worker');
+-    }
+-  }
+-
+   async moduleInit(ggufFiles: { name: string; blob: Blob }[]): Promise<void> {
+-    let moduleCode = JSPI_STUB + (await this.getModuleCode());
+-    if (this.resources.noWebGPU) {
+-      // make requestAdapter() resolve to null so ggml-webgpu skips device registration
+-      moduleCode =
+-        'try{Object.defineProperty(WorkerNavigator.prototype,"gpu",{get:()=>({requestAdapter:async()=>null})});}catch(e){}' +
+-        moduleCode;
+-    }
+-    let mainModuleCode = moduleCode.replace('var Module', 'var ___Module');
++    const compat = this.resources.compat;
+     const runOptions = {
+       pathConfig: {
+         'wllama.wasm': this.resources.wasmPath,
+       },
+       nbThread: this.nbThread,
+-      compat: this.resources.compat,
++      compat,
++      noWebGPU: this.resources.noWebGPU === true,
++      moduleUrl: compat
++        ? this.resources.compatModuleUrl
++        : this.resources.moduleUrl,
+     };
+-    const completeCode: string = [
+-      `const RUN_OPTIONS = ${JSON.stringify(runOptions)};`,
+-      `function wModuleInit() { ${mainModuleCode}; return Module; }`,
+-      LLAMA_CPP_WORKER_CODE,
+-    ].join(';\n\n');
+-    this.worker = createWorker(completeCode);
++    this.worker = createWorker(this.resources.workerUrl, runOptions);
+     this.worker.onmessage = this.onRecvMsg.bind(this);
+     this.worker.onerror = this.logger.error;
+ 
+     const res = await this.pushTask({
+       verb: 'module.init',
+       args: [
+-        new Blob([moduleCode], { type: 'text/javascript' }),
++        compat ? this.resources.compatPthreadUrl : this.resources.pthreadUrl,
+         this.useAsyncFile,
+       ],
+       callbackId: this.taskId++,

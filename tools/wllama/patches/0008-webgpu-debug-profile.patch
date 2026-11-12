@@ -1,0 +1,31 @@
+Pass a WebGPU debug profile from the offscreen page into the worker.
+
+Sakutto can set globalThis.__SAKUTTO_WEBGPU_DEBUG__ to simulate AMD-like 2 GiB
+buffer limits inside ggml-webgpu (patch 0007) on a machine that is not AMD.
+
+diff --git a/src/utils.ts b/src/utils.ts
+--- a/src/utils.ts
++++ b/src/utils.ts
+@@ -341,6 +341,7 @@ export interface WorkerRunOptions {
+   nbThread: number;
+   compat: boolean;
+   noWebGPU?: boolean;
++  webgpuDebug?: string;
+   moduleUrl: string;
+ }
+ 
+diff --git a/src/worker.ts b/src/worker.ts
+--- a/src/worker.ts
++++ b/src/worker.ts
+@@ -102,6 +102,11 @@ export class ProxyToWorker {
+       nbThread: this.nbThread,
+       compat,
+       noWebGPU: this.resources.noWebGPU === true,
++      webgpuDebug:
++        typeof (globalThis as { __SAKUTTO_WEBGPU_DEBUG__?: unknown }).__SAKUTTO_WEBGPU_DEBUG__ ===
++        'string'
++          ? (globalThis as { __SAKUTTO_WEBGPU_DEBUG__: string }).__SAKUTTO_WEBGPU_DEBUG__
++          : undefined,
+       moduleUrl: compat
+         ? this.resources.compatModuleUrl
+         : this.resources.moduleUrl,

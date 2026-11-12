@@ -1,0 +1,33 @@
+Stop keeping per-request model state that translation never reuses.
+
+The prompt cache and the context checkpoints read a slot's KV cells back from the GPU, which
+took over a second per request on WebGPU. A finished request that asked for no prompt reuse now
+clears its cells; left behind, they widen every attention step for all later requests.
+
+diff --git a/cpp/wllama-context.h b/cpp/wllama-context.h
+index cae07f6..51682a6 100644
+--- a/cpp/wllama-context.h
++++ b/cpp/wllama-context.h
+@@ -482,6 +482,9 @@ struct wllama_context
+       params.flash_attn_type = req.flash_attn.value ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+     if (req.swa_full.not_null())
+       params.swa_full = req.swa_full.value;
++    // Reading a slot's state back from a WebGPU buffer takes over a second per request.
++    params.cache_ram_mib = 0;
++    params.n_ctx_checkpoints = 0;
+     if (req.n_ctx_checkpoints.not_null())
+       params.n_ctx_checkpoints = req.n_ctx_checkpoints.value;
+     if (req.checkpoint_min_step.not_null())
+diff --git a/llama.cpp/tools/server/server-context.cpp b/llama.cpp/tools/server/server-context.cpp
+index a18b754..8671eb9 100644
+--- a/llama.cpp/tools/server/server-context.cpp
++++ b/llama.cpp/tools/server/server-context.cpp
+@@ -595,7 +595,7 @@ struct server_slot {
+ 
+             // do not keep context of the child slots - the parent's context is enough
+             // nor of the stateless slots - no task ever reuses it
+-            if (task->is_child() || task->is_stateless()) {
++            if (task->is_child() || task->is_stateless() || !task->params.cache_prompt) {
+                 prompt_clear();
+             }
+ 

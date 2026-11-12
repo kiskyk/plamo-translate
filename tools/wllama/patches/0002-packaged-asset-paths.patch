@@ -1,0 +1,156 @@
+diff --git a/src/wllama.ts b/src/wllama.ts
+index 6ecbb68..1c1dd9b 100644
+--- a/src/wllama.ts
++++ b/src/wllama.ts
+@@ -48,7 +48,6 @@ import type {
+ } from './types/oai-compat';
+ import { LogLevel } from './types/types';
+ import { getHFModelSource, type HuggingFaceParams } from './huggingface';
+-import { WasmCompatFromCDN } from './wasm-from-cdn';
+ 
+ export interface WllamaLogger {
+   debug: typeof console.debug;
+@@ -96,6 +95,13 @@ export interface WllamaChatMessage {
+ 
+ export interface AssetsPathConfig {
+   default: string;
++  // packaged files, required by builds that do not inline the worker code
++  'wllama.worker.js'?: string;
++  'wllama.module.js'?: string;
++  'wllama.pthread.js'?: string;
++  'wllama.compat.js'?: string;
++  'wllama.compat.pthread.js'?: string;
++  'wllama.compat.wasm'?: string;
+   'single-thread/wllama.wasm'?: string; // deprecated, use "default" instead
+   'multi-thread/wllama.wasm'?: string; // deprecated, use "default" instead
+ }
+@@ -214,7 +220,6 @@ export class Wllama {
+         parallelDownloads: wllamaConfig.parallelDownloads,
+         allowOffline: wllamaConfig.allowOffline,
+       });
+-    this.setCompat('default');
+   }
+ 
+   private logger() {
+@@ -240,12 +245,12 @@ export class Wllama {
+   }
+ 
+   /**
+-   * Set compatibility options for Wllama.
+-   * @param compat Set to null to disable compatibility, or 'default' to use the default compat resources from CDN.
++   * Set the compat glue and wasm files.
++   * @param compat Pass a URL to a compat glue script and wasm. Pass null to use the packaged compat files from AssetsPathConfig.
+    * @param mode 'safari' by default; If set to 'firefox_safari', the compat mode will **also** be enabled on Firefox, which will significantly degrade the performance but allow using WebGPU on Firefox.
+    */
+   setCompat(
+-    compat: WllamaCompat | null | 'default',
++    compat: WllamaCompat | null,
+     mode: 'safari' | 'firefox_safari' = 'safari'
+   ) {
+     if (mode === 'safari') {
+@@ -254,7 +259,7 @@ export class Wllama {
+         return;
+       }
+     }
+-    this.compat = compat === 'default' ? WasmCompatFromCDN : compat;
++    this.compat = compat;
+   }
+ 
+   /**
+@@ -1166,47 +1171,67 @@ export class Wllama {
+   }
+ 
+   getWorkerResources(): WllamaWorkerResources {
++    const workerUrl = this.pathConfig['wllama.worker.js'];
++    const moduleUrl = this.pathConfig['wllama.module.js'];
++    const pthreadUrl = this.pathConfig['wllama.pthread.js'];
++    if (!workerUrl || !moduleUrl || !pthreadUrl) {
++      throw new WllamaError(
++        'static worker assets are missing from pathConfig',
++        'load_error'
++      );
++    }
+     const workerResources: WllamaWorkerResources = {
+       wasmPath: absoluteUrl(this.pathConfig['default']),
++      workerUrl: absoluteUrl(workerUrl),
++      moduleUrl: absoluteUrl(moduleUrl),
++      pthreadUrl: absoluteUrl(pthreadUrl),
++      compatModuleUrl: '',
++      compatPthreadUrl: '',
+       compat: false,
+     };
+     if (needCompat()) {
+-      if (!this.compat) {
+-        this.logger().warn(
+-          'Not using compat mode' +
+-            (isFirefox()
+-              ? ' (expected on Firefox - WebGPU will be disabled)'
+-              : '')
+-        );
+-      } else {
+-        const isUsingDefault =
+-          this.compat.worker === WasmCompatFromCDN.worker &&
+-          this.compat.wasm === WasmCompatFromCDN.wasm;
+-        if (isUsingDefault) {
+-          this.logger().warn(
+-            'Compatibility mode is activated, using resources from CDN. To use local resources, please refer to @wllama/wllama-compat package.'
++      if (this.compat) {
++        const compatWorker = this.compat.worker;
++        const compatPthreadUrl = this.pathConfig['wllama.compat.pthread.js'];
++        if (typeof compatWorker !== 'string') {
++          throw new WllamaError(
++            'compat.worker must be a URL for the packaged worker',
++            'load_error'
+           );
+-          this.logger().warn(
+-            'IMPORTANT: Performance will be significantly degraded in compatibility mode.'
++        }
++        if (!compatPthreadUrl) {
++          throw new WllamaError(
++            'wllama.compat.pthread.js is missing from pathConfig',
++            'load_error'
+           );
+         }
+-
+         workerResources.wasmPath = absoluteUrl(this.compat.wasm);
+-        workerResources.jsPath = this.compat.worker;
+-        workerResources.compat = true;
++        workerResources.compatModuleUrl = absoluteUrl(compatWorker);
++        workerResources.compatPthreadUrl = absoluteUrl(compatPthreadUrl);
++      } else {
++        const compatModuleUrl = this.pathConfig['wllama.compat.js'];
++        const compatPthreadUrl = this.pathConfig['wllama.compat.pthread.js'];
++        const compatWasm = this.pathConfig['wllama.compat.wasm'];
++        if (!compatModuleUrl || !compatPthreadUrl || !compatWasm) {
++          throw new WllamaError(
++            'compat assets are missing from pathConfig',
++            'load_error'
++          );
++        }
++        workerResources.wasmPath = absoluteUrl(compatWasm);
++        workerResources.compatModuleUrl = absoluteUrl(compatModuleUrl);
++        workerResources.compatPthreadUrl = absoluteUrl(compatPthreadUrl);
+       }
++      workerResources.compat = true;
++      this.logger().warn(
++        'Compatibility mode is activated, performance will be degraded'
++      );
+     }
+ 
+-    if (isFirefox()) {
+-      if (workerResources.compat) {
+-        this.logger().warn(
+-          'Using compat mode on Firefox, performance will be significantly degraded; Consider enabling "javascript.options.wasm_js_promise_integration" in "about:config".'
+-        );
+-      } else if (!isSupportJSPI()) {
+-        this.logger().warn(
+-          'WebGPU is disabled on Firefox due to missing JSPI support. Please consider enabling compat mode, or enabling "javascript.options.wasm_js_promise_integration" in "about:config".'
+-        );
+-      }
++    if (isFirefox() && !workerResources.compat && !isSupportJSPI()) {
++      this.logger().warn(
++        'WebGPU is disabled on Firefox due to missing JSPI support'
++      );
+     }
+ 
+     return workerResources;
