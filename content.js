@@ -345,7 +345,7 @@
     ui.panel.hidden = !visible;
     if (!visible) return;
 
-    ui.msg.textContent = note || (busy ? `翻訳中 残り ${busy} 段落` : `翻訳済み ${done} 段落`);
+    ui.msg.textContent = note || (busy && engineNote) || (busy ? `翻訳中 残り ${busy} 段落` : `翻訳済み ${done} 段落`);
     ui.msg.setAttribute("aria-live", note ? "polite" : "off");
     ui.meter.hidden = !busy;
     ui.fill.style.transform = `scaleX(${done / Math.max(1, done + busy)})`;
@@ -570,7 +570,15 @@
   }
 
   globalThis.__plamoPage = { toggle, translateSelection, isOn: () => on };
+  // The built-in engine's first use downloads the model; say so instead of looking stuck.
+  let engineNote = null;
   globalThis.chrome?.runtime?.onMessage?.addListener((msg) => {
+    if (msg?.type === "engine-state") {
+      const s = msg.state || {};
+      engineNote = s.phase === "downloading" ? `モデルを取得中 ${s.pct}%（初回だけ）`
+        : s.phase === "loading" ? "モデルを読み込み中…" : null;
+      paint();
+    }
     if (msg?.type === "toggle") toggle();
     if (msg?.type === "translate-selection") translateSelection(msg.text);
   });

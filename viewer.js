@@ -21,6 +21,16 @@ function modelLabel(file) {
   return m ? "PLaMo " + m[1].toUpperCase() : "接続中";
 }
 
+// The built-in engine reports its first-run download here (the viewer is an extension page).
+let engineLabel = "";
+globalThis.chrome?.runtime?.onMessage?.addListener((msg) => {
+  if (msg?.type !== "engine-state") return;
+  const s = msg.state || {};
+  engineLabel = s.phase === "downloading" ? `モデルを取得中 ${s.pct}%` : s.phase === "loading" ? "モデルを読み込み中…" : "";
+  if (engineLabel) { $("server").textContent = engineLabel; $("server").className = "server"; }
+  else if (s.phase === "ready") checkServer();
+});
+
 let checkingStart = 0; // a start takes seconds; polling must not report "stopped" meanwhile
 let startError = ""; // why the last start failed; polling has no way to learn it again
 
@@ -40,7 +50,7 @@ async function checkServer(start = false) {
   try {
     let model;
     if (inExtension) {
-      if (start) { el.textContent = "サーバーを起動中…"; el.className = "server"; button.hidden = true; $("stopServer").hidden = true; }
+      if (start) { el.textContent = engineLabel || "サーバーを起動中…"; el.className = "server"; button.hidden = true; $("stopServer").hidden = true; }
       const r = await chrome.runtime.sendMessage({ type: start ? "ensure" : "health" });
       if (!r?.ok) throw Object.assign(new Error(), { noHost: r?.noHost, log: r?.log });
       model = r.model;

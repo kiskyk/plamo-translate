@@ -204,6 +204,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       badge("!", "#c0392b");
       chrome.action.setTitle({ title: "内蔵エンジンを読み込めません: " + (st.detail || "").slice(0, 200) });
     } else badge("");
+    // Content scripts do not hear the offscreen document directly; pass it on to the tabs.
+    chrome.tabs.query({ url: ["http://*/*", "https://*/*", "file://*/*"] }).then((tabs) => {
+      for (const t of tabs) chrome.tabs.sendMessage(t.id, msg).catch(() => {});
+    });
     return;
   }
   if (msg?.type === "translate") {
